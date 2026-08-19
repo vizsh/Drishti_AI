@@ -50,8 +50,19 @@ Stage 4 (object detector) is in progress, not done:
   (`idibag/kinesis-ai-contraband`) for labeling — needs human labeling
   before a v2 retrain.
 
-Next: Stage 7, the risk engine (fuse baseline z-scores + behaviour +
-object-detection confidence + temporal pattern scoring into one risk value),
-which can be built and tested now using Stage 6's z-scores even before the
-object detector is finalized — object confidence just plugs in as one more
-input once ready.
+Stage 7 (risk engine, `risk_engine/`) done — fuses baseline z-scores +
+sustained-event detection + pattern scoring into one risk value with
+deterministic explanations. Validated on real footage: real alerts fired
+with correct text.
+
+Stage 9 (backend + dashboard) done — `backend/` runs the real pipeline live
+on a background thread, streams telemetry/alerts over WebSocket;
+`dashboard/index.html` is a live single-page UI (seating grid, risk trend
+chart, alert feed with a working dismiss/feedback-loop button). Verified
+end-to-end in-browser against the real running server.
+
+Next: Stage 8, ST-GCN++ behaviour classification (`behaviour/`) — the
+rule-based deviation detector (Stage 7) already provides a fallback signal,
+so this stage adds the ML classifier in parallel per docs/architecture.md
+§6. After that: retrain the Stage 4 object detector once the 405 uploaded
+frames are labeled on Roboflow, then Jetson deployment packaging.

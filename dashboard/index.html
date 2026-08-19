@@ -91,6 +91,10 @@
         <div class="text-xs text-slate-500 mono">SESSION TIME</div>
         <div id="clock" class="text-sm mono font-semibold">00:00:00</div>
       </div>
+      <div id="cam-badge" class="glass rounded-full px-4 py-2 flex items-center gap-2">
+        <span id="cam-dot" class="w-2 h-2 rounded-full bg-slate-500"></span>
+        <span id="cam-text" class="text-xs mono text-slate-400">CAMERA —</span>
+      </div>
       <div id="conn-badge" class="glass rounded-full px-4 py-2 flex items-center gap-2">
         <span id="conn-dot" class="w-2 h-2 rounded-full bg-slate-500"></span>
         <span id="conn-text" class="text-xs mono text-slate-400">CONNECTING</span>
@@ -118,7 +122,26 @@
     </div>
   </div>
 
-  <div class="grid grid-cols-3 gap-6">
+  <div class="grid grid-cols-4 gap-6">
+
+    <!-- Live feed -->
+    <div class="col-span-1">
+      <h2 class="text-sm font-semibold text-slate-400 mb-3 tracking-wide">LIVE FEED</h2>
+      <div class="glass rounded-2xl p-2 relative overflow-hidden mb-3" style="aspect-ratio:16/10;">
+        <img id="live-feed" class="w-full h-full object-cover rounded-xl" style="filter:brightness(.92) contrast(1.05);" />
+        <div id="feed-placeholder" class="absolute inset-0 flex items-center justify-center text-xs text-slate-500 mono">
+          waiting for stream…
+        </div>
+        <div class="absolute top-3 left-3 flex items-center gap-1.5 px-2 py-1 rounded-md text-[10px] mono bg-black/50">
+          <span class="w-1.5 h-1.5 rounded-full bg-red-500 pulse"></span> REC · seat-anchored, faces not tracked
+        </div>
+      </div>
+      <div class="glass rounded-2xl p-4 text-xs mono text-slate-400 leading-relaxed">
+        <div class="flex justify-between mb-1"><span>Object detector</span><span id="det-mode" class="text-slate-300">—</span></div>
+        <div class="flex justify-between mb-1"><span>Perception</span><span class="text-slate-300">YOLO11-pose + BoT-SORT</span></div>
+        <div class="flex justify-between"><span>Identity</span><span class="text-slate-300">seat-anchored (homography)</span></div>
+      </div>
+    </div>
 
     <!-- Seat grid -->
     <div class="col-span-2">
@@ -150,6 +173,21 @@
 const seatState = {};   // seat_id -> {risk, yaw_z, motion_z, calibrated, progress}
 const riskHistory = {}; // seat_id -> [{t, risk}]
 let alertCount = 0;
+let lastHeartbeat = 0;
+let detectorFinetuned = false;
+
+function updateCameraBadge(online) {
+  const dot = document.getElementById('cam-dot');
+  const text = document.getElementById('cam-text');
+  if (online) {
+    dot.className = 'w-2 h-2 rounded-full bg-emerald-400 pulse';
+    text.textContent = 'CAMERA ONLINE'; text.className = 'text-xs mono text-emerald-400';
+  } else {
+    dot.className = 'w-2 h-2 rounded-full bg-red-500';
+    text.textContent = 'CAMERA DEGRADED'; text.className = 'text-xs mono text-red-400';
+  }
+}
+setInterval(() => { updateCameraBadge(lastHeartbeat && (Date.now() - lastHeartbeat) < 3000); }, 1000);
 const seatColors = ["#22d3ee", "#a78bfa", "#fb923c", "#34d399", "#f472b6", "#60a5fa"];
 const seatColor = (id) => {
   const idx = [...new Set(Object.keys(seatState))].sort().indexOf(id);
@@ -254,12 +292,15 @@ function addAlert(ev) {
   card.className = 'slide-in rounded-xl p-3 border';
   card.style.borderColor = '#fb5b5b40';
   card.style.background = '#fb5b5b0c';
+  const objBadge = ev.object_label
+    ? `<span class="text-[9px] mono px-1.5 py-0.5 rounded bg-orange-500/15 text-orange-300 mr-1" title="v1 detector known to overfit on real footage — unverified">${ev.object_label.toUpperCase()} ⚠ UNVERIFIED</span>`
+    : '';
   card.innerHTML = `
     <div class="flex items-center justify-between mb-1">
       <span class="text-xs font-bold" style="color:${seatColor(ev.seat_id)}">${ev.seat_id.toUpperCase()}</span>
       <span class="text-[10px] mono text-slate-500">${ev.timestamp.toFixed(1)}s · risk ${ev.risk_score.toFixed(2)}</span>
     </div>
-    <p class="text-xs text-slate-300 leading-snug mb-2">${ev.explanation}</p>
+    <p class="text-xs text-slate-300 leading-snug mb-2">${objBadge}${ev.explanation}</p>
     <button class="btn-dismiss text-[10px] mono px-2 py-1 rounded-md border border-white/10 text-slate-400" data-seat="${ev.seat_id}">
       DISMISS — FALSE POSITIVE
     </button>`;
@@ -343,6 +384,18 @@ function connect() {
       addFeedbackNote(ev);
     } else if (ev.type === 'seat_empty') {
       // seat currently has nobody tracked to it — leave last known state displayed
+    } else if (ev.type === 'frame') {
+      const img = document.getElementById('live-feed');
+      img.src = 'data:image/jpeg;base64,' + ev.image;
+      document.getElementById('feed-placeholder').style.display = 'none';
+    } else if (ev.type === 'heartbeat') {
+      lastHeartbeat = Date.now();
+      updateCameraBadge(true);
+      if (ev.object_detector_finetuned !== undefined && ev.object_detector_finetuned !== detectorFinetuned) {
+        detectorFinetuned = ev.object_detector_finetuned;
+        document.getElementById('det-mode').textContent = detectorFinetuned
+          ? 'fine-tuned v1 (unverified)' : 'stock COCO (baseline)';
+      }
     }
   };
 }

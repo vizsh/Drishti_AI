@@ -10,16 +10,31 @@ really computes, not a scripted demo.
 
 from __future__ import annotations
 
+import base64
+import os
 import queue
 import threading
 import time
+from pathlib import Path
 from typing import Optional
+
+import cv2
 
 from calibration.baseline import BaselineCalibrator, TemporalSample, compute_motion_magnitude
 from calibration.homography import SeatCalibration
 from ingestion.video_source import VideoSource
+from perception.object_detector import ObjectDetector
 from perception.pose import LEFT_SHOULDER, RIGHT_SHOULDER, PoseEstimator
 from risk_engine.scorer import RiskEngine
+
+SKELETON_EDGES = [
+    (5, 6), (5, 7), (7, 9), (6, 8), (8, 10),
+    (5, 11), (6, 12), (11, 12),
+    (11, 13), (13, 15), (12, 14), (14, 16),
+    (0, 5), (0, 6),
+]
+RISK_COLOR_BGR = {"calm": (129, 209, 52), "elevated": (36, 191, 251), "alert": (91, 91, 251)}
+FINE_TUNED_WEIGHTS = Path("data/weights/phone_detector_v1.pt")
 
 
 def build_illustrative_calibration() -> SeatCalibration:
@@ -50,21 +65,35 @@ class PipelineWorker(threading.Thread):
         device: Optional[str] = None,
         settling_seconds: float = 20.0,
         target_fps: float = 10.0,
+        stream_every_n_frames: int = 2,
+        object_detect_every_n_frames: int = 5,
     ):
         super().__init__(daemon=True)
         self.video_path = video_path
         self.event_queue = event_queue
         self.device = device
         self.target_fps = target_fps
+        self.stream_every_n_frames = stream_every_n_frames
+        self.object_detect_every_n_frames = object_detect_every_n_frames
 
         self.seat_cal = build_illustrative_calibration()
         self.calibrator = BaselineCalibrator(settling_window_seconds=settling_seconds)
         self.risk_engine = RiskEngine()
         self.pose_estimator = PoseEstimator(device=device)
+
+        # v1 fine-tune only, per docs/architecture.md §4 — known to overfit on
+        # background objects (found via Stage 4 validation), so its output is
+        # surfaced to the UI tagged "experimental", never fed silently as fact.
+        weights = str(FINE_TUNED_WEIGHTS) if FINE_TUNED_WEIGHTS.exists() else "yolo11n.pt"
+        self.object_detector = ObjectDetector(weights=weights, confidence_threshold=0.35, device=device)
+        self.object_detector_is_finetuned = FINE_TUNED_WEIGHTS.exists()
+
         self._prev_keypoints: dict[str, list[tuple[float, float]]] = {}
         self._stop_event = threading.Event()
         self._start_wall_time = 0.0
         self._loop_count = 0
+        self._frame_counter = 0
+        self._last_frame_wall_time = 0.0
 
     def stop(self) -> None:
         self._stop_event.set()
@@ -90,9 +119,20 @@ class PipelineWorker(threading.Thread):
                 if self._stop_event.is_set():
                     break
                 sim_time = time.time() - self._start_wall_time  # monotonic clock for calibration/risk logic
+                self._frame_counter += 1
                 poses = self.pose_estimator.estimate(frame.image, timestamp=sim_time)
 
+                # Object detection (docs/architecture.md §4) runs on its own,
+                # slower cadence — a separate model pass, not free.
+                object_detections = []
+                if self._frame_counter % self.object_detect_every_n_frames == 0:
+                    object_detections = self.object_detector.detect(frame.image)
+
+                vis = frame.image if self.stream_every_n_frames and self._frame_counter % self.stream_every_n_frames == 0 else None
+
                 seen_seats = set()
+                seat_risk_this_frame: dict[str, str] = {}
+
                 for p in poses:
                     if p.track_id is None:
                         continue
@@ -120,11 +160,25 @@ class PipelineWorker(threading.Thread):
                         self.event_queue.put(
                             {"type": "calibrating", "seat_id": seat_id, "progress": progress, "timestamp": sim_time}
                         )
+                        seat_risk_this_frame[seat_id] = "calibrating"
+                        if vis is not None:
+                            self._draw_person(vis, p, seat_id, "calibrating", None)
                         continue
 
                     baseline = self.calibrator.baseline(seat_id)
                     yaw_z = baseline.yaw_zscore(sample.torso_yaw) if sample.torso_yaw is not None else None
                     motion_z = baseline.motion_zscore(sample.motion_magnitude)
+
+                    # nearest contraband detection to this seat's anchor, if any —
+                    # tagged experimental in the UI, per the v1 overfitting finding.
+                    object_label = None
+                    object_conf = 0.0
+                    for det in object_detections:
+                        dx1, dy1, dx2, dy2 = det.xyxy
+                        center = ((dx1 + dx2) / 2, (dy1 + dy2) / 2)
+                        if self.seat_cal.nearest_seat(center)[0] == seat_id:
+                            object_label, object_conf = det.label, det.confidence
+                            break
 
                     assessment = self.risk_engine.observe(
                         seat_id=seat_id,
@@ -133,8 +187,14 @@ class PipelineWorker(threading.Thread):
                         motion_zscore=motion_z,
                         baseline_yaw_mean=baseline.torso_yaw_mean,
                         baseline_yaw_std=baseline.torso_yaw_std,
-                        object_label=None,
+                        object_label=object_label,
+                        object_confidence=object_conf,
                     )
+
+                    level = "alert" if assessment.risk_score >= 0.5 else ("elevated" if assessment.risk_score >= 0.25 else "calm")
+                    seat_risk_this_frame[seat_id] = level
+                    if vis is not None:
+                        self._draw_person(vis, p, seat_id, level, assessment.risk_score)
 
                     self.event_queue.put(
                         {
@@ -144,6 +204,7 @@ class PipelineWorker(threading.Thread):
                             "risk_score": round(assessment.risk_score, 3),
                             "yaw_z": round(yaw_z, 2) if yaw_z is not None else None,
                             "motion_z": round(motion_z, 2),
+                            "object_label": object_label,
                         }
                     )
                     if assessment.explanation:
@@ -154,11 +215,48 @@ class PipelineWorker(threading.Thread):
                                 "timestamp": sim_time,
                                 "risk_score": round(assessment.risk_score, 3),
                                 "explanation": assessment.explanation,
+                                "object_label": object_label,
                             }
                         )
 
                 for seat_id in list(self.seat_cal.seats.keys()):
                     if seat_id not in seen_seats:
                         self.event_queue.put({"type": "seat_empty", "seat_id": seat_id, "timestamp": sim_time})
+
+                if vis is not None:
+                    self._emit_frame(vis, sim_time)
+
+                now = time.time()
+                if now - self._last_frame_wall_time >= 1.0:
+                    self._last_frame_wall_time = now
+                    self.event_queue.put(
+                        {
+                            "type": "heartbeat",
+                            "timestamp": sim_time,
+                            "wall_time": now,
+                            "object_detector_finetuned": self.object_detector_is_finetuned,
+                        }
+                    )
         finally:
             video.release()
+
+    def _draw_person(self, vis, pose, seat_id: str, level: str, risk_score: Optional[float]) -> None:
+        color = RISK_COLOR_BGR.get(level, (200, 200, 200))
+        keypoints = pose.smoothed_keypoints or pose.keypoints
+        for a, b in SKELETON_EDGES:
+            if pose.keypoint_confidence[a] > 0.3 and pose.keypoint_confidence[b] > 0.3:
+                xa, ya = keypoints[a]
+                xb, yb = keypoints[b]
+                cv2.line(vis, (int(xa), int(ya)), (int(xb), int(yb)), color, 2)
+        x1, y1, x2, y2 = (int(v) for v in pose.xyxy)
+        cv2.rectangle(vis, (x1, y1), (x2, y2), color, 2)
+        label = seat_id.upper() if risk_score is None else f"{seat_id.upper()} {risk_score:.2f}"
+        cv2.putText(vis, label, (x1, max(0, y1 - 8)), cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 2)
+
+    def _emit_frame(self, image, sim_time: float) -> None:
+        small = cv2.resize(image, (480, int(image.shape[0] * 480 / image.shape[1])))
+        ok, buf = cv2.imencode(".jpg", small, [cv2.IMWRITE_JPEG_QUALITY, 65])
+        if not ok:
+            return
+        b64 = base64.b64encode(buf).decode("ascii")
+        self.event_queue.put({"type": "frame", "timestamp": sim_time, "image": b64})

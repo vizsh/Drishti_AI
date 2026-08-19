@@ -61,8 +61,31 @@ on a background thread, streams telemetry/alerts over WebSocket;
 chart, alert feed with a working dismiss/feedback-loop button). Verified
 end-to-end in-browser against the real running server.
 
-Next: Stage 8, ST-GCN++ behaviour classification (`behaviour/`) — the
-rule-based deviation detector (Stage 7) already provides a fallback signal,
-so this stage adds the ML classifier in parallel per docs/architecture.md
-§6. After that: retrain the Stage 4 object detector once the 405 uploaded
-frames are labeled on Roboflow, then Jetson deployment packaging.
+Stage 8 (rule-based component, `behaviour/gestures.py`) done — hand_reach_across,
+a geometrically-grounded detector (wrist projects into a neighbor seat's
+zone via the same homography as Stage 3) for the PS's explicitly named
+"unusual hand movements" objective. Deliberately does NOT include a
+flat-threshold "lean toward neighbor" detector: an early version had one,
+and testing against real footage caught it firing constantly on a seat
+whose camera-angle baseline alone crossed the threshold — the exact
+false-positive failure mode Stage 6 exists to eliminate. Stage 7's z-score
+deviation event already covers sustained lean/turn correctly. Wired into
+the live dashboard (backend/pipeline_worker.py) as a distinct "GESTURE"
+alert type, verified firing in-browser against the real running server.
+
+ST-GCN++ (PYSKL) — the ML half of Stage 8 per docs/architecture.md §6 — is
+NOT implemented. It needs labeled exam-specific gesture clips, which don't
+exist yet; the same Roboflow labeling pass already in flight for the
+object detector would need extending to short gesture clips to unblock it.
+Deferred, not abandoned — the rule-based signal above is designed to keep
+running alongside it once it exists, per the architecture doc's own
+"hybrid" guidance.
+
+Next: retrain the Stage 4 object detector once the 405 uploaded frames are
+labeled on Roboflow, then Jetson deployment packaging. Known open gaps vs.
+the PS's risk table (tracked honestly, not hidden): occlusion handling
+(multi-camera fusion, single camera only today), poor-lighting robustness
+(CLAHE preprocessing, not implemented), camera blind-spot coverage
+validator, persistent event-log storage for invigilator review (Postgres —
+alerts are in-memory/session-only right now), and evidence-clip storage
+with face-blurring + audit logging.

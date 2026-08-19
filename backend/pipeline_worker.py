@@ -20,6 +20,7 @@ from typing import Optional
 
 import cv2
 
+from behaviour.gestures import GestureDetector, explain_gesture
 from calibration.baseline import BaselineCalibrator, TemporalSample, compute_motion_magnitude
 from calibration.homography import SeatCalibration
 from ingestion.video_source import VideoSource
@@ -79,6 +80,7 @@ class PipelineWorker(threading.Thread):
         self.seat_cal = build_illustrative_calibration()
         self.calibrator = BaselineCalibrator(settling_window_seconds=settling_seconds)
         self.risk_engine = RiskEngine()
+        self.gesture_detector = GestureDetector(self.seat_cal)
         self.pose_estimator = PoseEstimator(device=device)
 
         # v1 fine-tune only, per docs/architecture.md §4 — known to overfit on
@@ -142,6 +144,17 @@ class PipelineWorker(threading.Thread):
                     if seat_id is None:
                         continue
                     seen_seats.add(seat_id)
+
+                    for gesture_event in self.gesture_detector.observe(seat_id, p, sim_time):
+                        self.event_queue.put(
+                            {
+                                "type": "gesture_alert",
+                                "seat_id": seat_id,
+                                "timestamp": sim_time,
+                                "gesture": gesture_event.gesture,
+                                "explanation": explain_gesture(gesture_event),
+                            }
+                        )
 
                     keypoints = p.smoothed_keypoints or p.keypoints
                     shoulder_width = abs(keypoints[RIGHT_SHOULDER][0] - keypoints[LEFT_SHOULDER][0]) or 1.0

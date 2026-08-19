@@ -281,6 +281,24 @@ function flashSeat(id) {
   }
 }
 
+// --- Gesture alert (Stage 8: geometrically-grounded, distinct from risk-engine alerts) ---
+function addGestureAlert(ev) {
+  const feed = document.getElementById('alert-feed');
+  if (feed.children.length === 1 && feed.children[0].textContent.includes('Waiting')) feed.innerHTML = '';
+  const card = document.createElement('div');
+  card.className = 'slide-in rounded-xl p-3 border';
+  card.style.borderColor = '#a78bfa40';
+  card.style.background = '#a78bfa0c';
+  card.innerHTML = `
+    <div class="flex items-center justify-between mb-1">
+      <span class="text-xs font-bold" style="color:${seatColor(ev.seat_id)}">${ev.seat_id.toUpperCase()}</span>
+      <span class="text-[10px] mono px-1.5 py-0.5 rounded bg-violet-500/20 text-violet-300">GESTURE</span>
+    </div>
+    <p class="text-xs text-slate-300 leading-snug">${ev.explanation}</p>`;
+  feed.prepend(card);
+  while (feed.children.length > 40) feed.removeChild(feed.lastChild);
+}
+
 // --- Alert feed ---
 function addAlert(ev) {
   alertCount++;
@@ -382,6 +400,9 @@ function connect() {
       flashSeat(ev.seat_id);
     } else if (ev.type === 'feedback') {
       addFeedbackNote(ev);
+    } else if (ev.type === 'gesture_alert') {
+      addGestureAlert(ev);
+      flashSeat(ev.seat_id);
     } else if (ev.type === 'seat_empty') {
       // seat currently has nobody tracked to it — leave last known state displayed
     } else if (ev.type === 'frame') {

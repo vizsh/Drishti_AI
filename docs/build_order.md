@@ -34,15 +34,24 @@ breaks everything built on top of it — verify before moving on.
 
 ## Current stage
 
-Stages 1-3 done and validated against real exam-hall footage
+Stages 1-3, 5, and 6 done and validated against real exam-hall footage
 (`data/test_videos/`, gitignored — supplied locally, not committed):
 - Ingestion + person detection (`ingestion/`, `perception/detector.py`)
-- BoT-SORT tracking (`perception/tracker.py`) — confirmed real ID churn on
-  real footage, motivating stage 3
-- Seat-anchoring homography (`calibration/`) — confirmed seat-level identity
-  is more stable than raw tracker IDs on the same footage
+- BoT-SORT tracking (`perception/tracker.py`)
+- Seat-anchoring homography (`calibration/homography.py`)
+- YOLO11-pose + One-Euro filtering (`perception/pose.py`, `one_euro_filter.py`)
+- Per-seat temporal buffer + baseline calibration (`calibration/baseline.py`)
 
-Next: Stage 5, YOLO11-pose + One-Euro filtering (`perception/`), then
-Stage 4, the fine-tuned phone/paper/earpiece object detector, which needs a
-labeled dataset (own staged footage + Roboflow/Kaggle public sets — see
-docs/architecture.md §4).
+Stage 4 (object detector) is in progress, not done:
+- v1 phone detector trained (`data/weights/phone_detector_v1.pt`, gitignored)
+  but found overfitting on real footage (false-positived on a chair) —
+  not trustworthy yet.
+- 405 candidate frames extracted from real footage and uploaded to Roboflow
+  (`idibag/kinesis-ai-contraband`) for labeling — needs human labeling
+  before a v2 retrain.
+
+Next: Stage 7, the risk engine (fuse baseline z-scores + behaviour +
+object-detection confidence + temporal pattern scoring into one risk value),
+which can be built and tested now using Stage 6's z-scores even before the
+object detector is finalized — object confidence just plugs in as one more
+input once ready.

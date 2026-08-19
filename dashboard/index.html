@@ -164,6 +164,43 @@
 
   </div>
 
+  <!-- Event log -->
+  <div class="mt-8">
+    <div class="flex items-center justify-between mb-3">
+      <h2 class="text-sm font-semibold text-slate-400 tracking-wide">EVENT LOG <span class="text-slate-600">— persisted, for invigilator review</span></h2>
+      <div class="flex items-center gap-2">
+        <select id="log-seat-filter" class="glass rounded-lg px-2 py-1.5 text-xs mono bg-transparent border-white/10 outline-none">
+          <option value="">all seats</option>
+        </select>
+        <select id="log-type-filter" class="glass rounded-lg px-2 py-1.5 text-xs mono bg-transparent border-white/10 outline-none">
+          <option value="">all types</option>
+          <option value="alert">alert</option>
+          <option value="gesture_alert">gesture</option>
+          <option value="feedback">feedback</option>
+          <option value="telemetry">telemetry</option>
+        </select>
+        <input id="log-search" type="text" placeholder="search explanation…" class="glass rounded-lg px-3 py-1.5 text-xs mono bg-transparent border-white/10 outline-none w-48" />
+        <button id="log-refresh" class="glass rounded-lg px-3 py-1.5 text-xs mono text-cyan-300 hover:bg-cyan-500/10">REFRESH</button>
+      </div>
+    </div>
+    <div class="glass rounded-2xl overflow-hidden">
+      <table class="w-full text-xs">
+        <thead>
+          <tr class="text-left text-slate-500 mono border-b border-white/10">
+            <th class="px-4 py-2 font-medium">TIME</th>
+            <th class="px-4 py-2 font-medium">SEAT</th>
+            <th class="px-4 py-2 font-medium">TYPE</th>
+            <th class="px-4 py-2 font-medium">RISK</th>
+            <th class="px-4 py-2 font-medium">DETAIL</th>
+          </tr>
+        </thead>
+        <tbody id="log-body">
+          <tr><td colspan="5" class="px-4 py-6 text-center text-slate-500 mono">loading…</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
   <footer class="mt-8 text-center text-xs text-slate-600 mono">
     identity is seat-anchored, not face-based · risk scored against each student's own calibrated baseline · illustrative seat calibration for demo
   </footer>
@@ -355,6 +392,71 @@ function updateAvgRisk() {
   const avg = risks.length ? risks.reduce((a,b)=>a+b,0)/risks.length : 0;
   document.getElementById('stat-avgrisk').textContent = avg.toFixed(2);
 }
+
+// --- Event log (persisted, Stage: event-log storage) ---
+const typeBadge = {
+  alert: '<span class="text-[9px] mono px-1.5 py-0.5 rounded bg-red-500/15 text-red-300">ALERT</span>',
+  gesture_alert: '<span class="text-[9px] mono px-1.5 py-0.5 rounded bg-violet-500/15 text-violet-300">GESTURE</span>',
+  feedback: '<span class="text-[9px] mono px-1.5 py-0.5 rounded bg-cyan-500/15 text-cyan-300">FEEDBACK</span>',
+  telemetry: '<span class="text-[9px] mono px-1.5 py-0.5 rounded bg-slate-500/15 text-slate-400">TELEMETRY</span>',
+};
+
+async function loadEventLog() {
+  const seat = document.getElementById('log-seat-filter').value;
+  const type = document.getElementById('log-type-filter').value;
+  const search = document.getElementById('log-search').value.trim();
+  const params = new URLSearchParams({ limit: '150' });
+  if (seat) params.set('seat_id', seat);
+  if (type) params.set('event_type', type);
+  if (search) params.set('search', search);
+
+  const body = document.getElementById('log-body');
+  try {
+    const res = await fetch(`/api/events?${params}`);
+    const data = await res.json();
+    if (!data.events.length) {
+      body.innerHTML = '<tr><td colspan="5" class="px-4 py-6 text-center text-slate-500 mono">no matching events</td></tr>';
+      return;
+    }
+    body.innerHTML = data.events.map(ev => `
+      <tr class="border-b border-white/5 hover:bg-white/[0.02]">
+        <td class="px-4 py-2 mono text-slate-500">${ev.sim_time.toFixed(1)}s</td>
+        <td class="px-4 py-2 font-semibold" style="color:${seatColor(ev.seat_id)}">${ev.seat_id.toUpperCase()}</td>
+        <td class="px-4 py-2">${typeBadge[ev.event_type] || ev.event_type}</td>
+        <td class="px-4 py-2 mono text-slate-400">${ev.risk_score != null ? ev.risk_score.toFixed(2) : '—'}</td>
+        <td class="px-4 py-2 text-slate-300">${ev.explanation || '—'}</td>
+      </tr>`).join('');
+  } catch (e) {
+    body.innerHTML = '<tr><td colspan="5" class="px-4 py-6 text-center text-red-400 mono">failed to load</td></tr>';
+  }
+}
+
+document.getElementById('log-refresh').addEventListener('click', loadEventLog);
+document.getElementById('log-search').addEventListener('keydown', (e) => { if (e.key === 'Enter') loadEventLog(); });
+document.getElementById('log-seat-filter').addEventListener('change', loadEventLog);
+document.getElementById('log-type-filter').addEventListener('change', loadEventLog);
+
+function populateSeatFilter() {
+  const select = document.getElementById('log-seat-filter');
+  const ids = Object.keys(seatState).sort();
+  const current = select.value;
+  select.innerHTML = '<option value="">all seats</option>' + ids.map(id => `<option value="${id}">${id.toUpperCase()}</option>`).join('');
+  select.value = current;
+}
+
+async function refreshAnalytics() {
+  try {
+    const res = await fetch('/api/analytics');
+    const data = await res.json();
+    document.getElementById('stat-alerts').textContent = data.total_alerts;
+  } catch (e) { /* keep last known value */ }
+}
+
+setInterval(loadEventLog, 8000);
+setInterval(refreshAnalytics, 4000);
+setInterval(populateSeatFilter, 5000);
+loadEventLog();
+refreshAnalytics();
 
 // --- Clock ---
 let sessionSeconds = 0;

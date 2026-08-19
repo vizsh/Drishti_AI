@@ -7,3 +7,8 @@ numpy>=1.26.0
 roboflow>=1.1.0
 python-dotenv>=1.0.0
 kaggle>=1.6.0
+
+# Stage 9: backend + dashboard
+fastapi>=0.115.0
+uvicorn[standard]>=0.32.0
+websockets>=13.0

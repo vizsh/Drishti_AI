@@ -1,0 +1,352 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>KINESIS AI — Live Monitor</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+<style>
+  :root {
+    --bg-void: #05070d;
+    --bg-panel: #0b0f1a;
+    --bg-card: #10162550;
+    --border-soft: #ffffff14;
+    --border-strong: #ffffff26;
+    --text-primary: #eef1f8;
+    --text-dim: #8a93a8;
+    --accent-cyan: #22d3ee;
+    --accent-violet: #a78bfa;
+    --risk-calm: #34d399;
+    --risk-elevated: #fbbf24;
+    --risk-alert: #fb5b5b;
+  }
+  * { font-family: 'Inter', ui-sans-serif, system-ui; }
+  .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
+  body {
+    background: var(--bg-void);
+    color: var(--text-primary);
+    background-image:
+      radial-gradient(circle at 15% 10%, #1a2340 0%, transparent 45%),
+      radial-gradient(circle at 85% 90%, #201435 0%, transparent 45%),
+      linear-gradient(rgba(255,255,255,0.025) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255,255,255,0.025) 1px, transparent 1px);
+    background-size: auto, auto, 42px 42px, 42px 42px;
+    min-height: 100vh;
+  }
+  .glass {
+    background: linear-gradient(180deg, #ffffff08, #ffffff02);
+    backdrop-filter: blur(14px);
+    border: 1px solid var(--border-soft);
+  }
+  .glow-calm    { box-shadow: 0 0 0 1px #34d39930, 0 0 28px -6px #34d39955; }
+  .glow-elevated{ box-shadow: 0 0 0 1px #fbbf2440, 0 0 28px -4px #fbbf2470; }
+  .glow-alert   { box-shadow: 0 0 0 1px #fb5b5b55, 0 0 36px -2px #fb5b5b90; }
+  @keyframes pulse-dot { 0%,100% { opacity:1; transform:scale(1);} 50% { opacity:.55; transform:scale(1.35);} }
+  .pulse { animation: pulse-dot 1.6s ease-in-out infinite; }
+  @keyframes alert-flash { 0% { background-color:#fb5b5b22;} 100% { background-color:transparent;} }
+  .flash { animation: alert-flash 1.2s ease-out; }
+  @keyframes slide-in { from { opacity:0; transform: translateY(-10px);} to { opacity:1; transform:translateY(0);} }
+  .slide-in { animation: slide-in .35s ease-out; }
+  ::-webkit-scrollbar { width: 8px; }
+  ::-webkit-scrollbar-thumb { background: #ffffff22; border-radius: 8px; }
+  .risk-bar-fill { transition: width .6s cubic-bezier(.4,0,.2,1), background-color .6s; }
+  .seat-card { transition: box-shadow .5s ease, border-color .5s ease, transform .2s ease; }
+  .seat-card:hover { transform: translateY(-2px); }
+  .grad-text {
+    background: linear-gradient(90deg, var(--accent-cyan), var(--accent-violet));
+    -webkit-background-clip: text; background-clip: text; color: transparent;
+  }
+  .btn-dismiss {
+    transition: all .2s ease;
+  }
+  .btn-dismiss:hover { background: #22d3ee20; border-color: #22d3ee80; }
+</style>
+</head>
+<body class="text-slate-100">
+
+<div class="max-w-[1600px] mx-auto px-6 py-6">
+
+  <!-- Header -->
+  <header class="flex items-center justify-between mb-6">
+    <div class="flex items-center gap-4">
+      <div class="w-11 h-11 rounded-xl glass flex items-center justify-center">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="url(#g1)" stroke-width="2">
+          <defs><linearGradient id="g1" x1="0" y1="0" x2="1" y2="1">
+            <stop offset="0%" stop-color="#22d3ee"/><stop offset="100%" stop-color="#a78bfa"/>
+          </linearGradient></defs>
+          <circle cx="12" cy="8" r="3.2"/><path d="M4 21c0-4 3.6-6.5 8-6.5s8 2.5 8 6.5"/>
+        </svg>
+      </div>
+      <div>
+        <h1 class="text-xl font-extrabold tracking-tight">KINESIS <span class="grad-text">AI</span></h1>
+        <p class="text-xs text-slate-400 mono">real-time exam behaviour monitor</p>
+      </div>
+    </div>
+    <div class="flex items-center gap-6">
+      <div class="text-right hidden sm:block">
+        <div class="text-xs text-slate-500 mono">SESSION TIME</div>
+        <div id="clock" class="text-sm mono font-semibold">00:00:00</div>
+      </div>
+      <div id="conn-badge" class="glass rounded-full px-4 py-2 flex items-center gap-2">
+        <span id="conn-dot" class="w-2 h-2 rounded-full bg-slate-500"></span>
+        <span id="conn-text" class="text-xs mono text-slate-400">CONNECTING</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- Stat strip -->
+  <div class="grid grid-cols-4 gap-4 mb-6">
+    <div class="glass rounded-2xl px-5 py-4">
+      <div class="text-xs text-slate-400 mono mb-1">SEATS MONITORED</div>
+      <div id="stat-seats" class="text-2xl font-bold">—</div>
+    </div>
+    <div class="glass rounded-2xl px-5 py-4">
+      <div class="text-xs text-slate-400 mono mb-1">CALIBRATED</div>
+      <div id="stat-calibrated" class="text-2xl font-bold">0</div>
+    </div>
+    <div class="glass rounded-2xl px-5 py-4">
+      <div class="text-xs text-slate-400 mono mb-1">ALERTS (SESSION)</div>
+      <div id="stat-alerts" class="text-2xl font-bold text-amber-400">0</div>
+    </div>
+    <div class="glass rounded-2xl px-5 py-4">
+      <div class="text-xs text-slate-400 mono mb-1">AVG RISK</div>
+      <div id="stat-avgrisk" class="text-2xl font-bold">0.00</div>
+    </div>
+  </div>
+
+  <div class="grid grid-cols-3 gap-6">
+
+    <!-- Seat grid -->
+    <div class="col-span-2">
+      <h2 class="text-sm font-semibold text-slate-400 mb-3 tracking-wide">SEATING GRID</h2>
+      <div id="seat-grid" class="grid grid-cols-2 gap-4 mb-6"></div>
+
+      <h2 class="text-sm font-semibold text-slate-400 mb-3 tracking-wide">RISK TREND — LAST 60s</h2>
+      <div class="glass rounded-2xl p-4" style="height:280px;">
+        <canvas id="trendChart"></canvas>
+      </div>
+    </div>
+
+    <!-- Alert feed -->
+    <div class="col-span-1">
+      <h2 class="text-sm font-semibold text-slate-400 mb-3 tracking-wide">ALERT FEED</h2>
+      <div id="alert-feed" class="glass rounded-2xl p-3 flex flex-col gap-2 overflow-y-auto" style="height:640px;">
+        <div class="text-xs text-slate-500 mono p-4 text-center">Waiting for events…</div>
+      </div>
+    </div>
+
+  </div>
+
+  <footer class="mt-8 text-center text-xs text-slate-600 mono">
+    identity is seat-anchored, not face-based · risk scored against each student's own calibrated baseline · illustrative seat calibration for demo
+  </footer>
+</div>
+
+<script>
+const seatState = {};   // seat_id -> {risk, yaw_z, motion_z, calibrated, progress}
+const riskHistory = {}; // seat_id -> [{t, risk}]
+let alertCount = 0;
+const seatColors = ["#22d3ee", "#a78bfa", "#fb923c", "#34d399", "#f472b6", "#60a5fa"];
+const seatColor = (id) => {
+  const idx = [...new Set(Object.keys(seatState))].sort().indexOf(id);
+  return seatColors[idx % seatColors.length];
+};
+
+function riskLevel(r) {
+  if (r >= 0.5) return "alert";
+  if (r >= 0.25) return "elevated";
+  return "calm";
+}
+const levelColor = { calm: "#34d399", elevated: "#fbbf24", alert: "#fb5b5b" };
+const levelGlow  = { calm: "glow-calm", elevated: "glow-elevated", alert: "glow-alert" };
+
+// --- Chart.js trend chart ---
+const ctx = document.getElementById('trendChart').getContext('2d');
+const trendChart = new Chart(ctx, {
+  type: 'line',
+  data: { datasets: [] },
+  options: {
+    responsive: true, maintainAspectRatio: false, animation: false,
+    interaction: { intersect: false, mode: 'index' },
+    scales: {
+      x: { type: 'linear', ticks: { color: '#64748b', font:{family:"'JetBrains Mono'",size:10} }, grid: { color: '#ffffff0a' } },
+      y: { min: 0, max: 1.2, ticks: { color: '#64748b', font:{family:"'JetBrains Mono'",size:10} }, grid: { color: '#ffffff0a' } },
+    },
+    plugins: { legend: { labels: { color: '#94a3b8', font:{family:"'Inter'",size:11} } } },
+  }
+});
+
+function ensureSeatDataset(seatId) {
+  if (!trendChart.data.datasets.find(d => d.label === seatId)) {
+    trendChart.data.datasets.push({
+      label: seatId, data: [], borderColor: seatColor(seatId),
+      backgroundColor: seatColor(seatId) + "22", tension: 0.35, pointRadius: 0, borderWidth: 2,
+    });
+  }
+}
+
+function pushRisk(seatId, t, risk) {
+  ensureSeatDataset(seatId);
+  const ds = trendChart.data.datasets.find(d => d.label === seatId);
+  ds.data.push({ x: t, y: risk });
+  const cutoff = t - 60;
+  ds.data = ds.data.filter(p => p.x >= cutoff);
+  const allX = trendChart.data.datasets.flatMap(d => d.data.map(p => p.x));
+  if (allX.length) {
+    trendChart.options.scales.x.min = Math.max(0, t - 60);
+    trendChart.options.scales.x.max = t;
+  }
+  trendChart.update('none');
+}
+
+// --- Seat grid rendering ---
+function renderSeatGrid() {
+  const grid = document.getElementById('seat-grid');
+  const ids = Object.keys(seatState).sort();
+  document.getElementById('stat-seats').textContent = ids.length || '—';
+  document.getElementById('stat-calibrated').textContent = ids.filter(id => seatState[id].calibrated).length;
+
+  grid.innerHTML = ids.map(id => {
+    const s = seatState[id];
+    const level = s.calibrated ? riskLevel(s.risk) : 'calibrating';
+    const color = s.calibrated ? levelColor[level] : '#64748b';
+    const glow = s.calibrated ? levelGlow[level] : '';
+    const pct = s.calibrated ? Math.min(100, s.risk * 100) : (s.progress * 100 || 0);
+    return `
+      <div class="seat-card glass rounded-2xl p-4 ${glow} ${s.flash ? 'flash' : ''}" style="border-color:${color}40">
+        <div class="flex items-center justify-between mb-2">
+          <span class="font-bold text-sm">${id.replace('_',' ').toUpperCase()}</span>
+          <span class="text-[10px] mono px-2 py-0.5 rounded-full" style="background:${color}22; color:${color}">
+            ${s.calibrated ? level.toUpperCase() : 'CALIBRATING'}
+          </span>
+        </div>
+        <div class="w-full h-2 rounded-full bg-white/5 overflow-hidden mb-2">
+          <div class="risk-bar-fill h-full rounded-full" style="width:${pct}%; background:${color}"></div>
+        </div>
+        <div class="flex justify-between text-[11px] mono text-slate-400">
+          <span>${s.calibrated ? 'risk ' + s.risk.toFixed(2) : (s.progress*100).toFixed(0) + '% settled'}</span>
+          <span>${s.calibrated ? 'yaw_z ' + (s.yaw_z ?? '—') : ''}</span>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+function flashSeat(id) {
+  if (seatState[id]) {
+    seatState[id].flash = true;
+    renderSeatGrid();
+    setTimeout(() => { if (seatState[id]) { seatState[id].flash = false; } }, 1200);
+  }
+}
+
+// --- Alert feed ---
+function addAlert(ev) {
+  alertCount++;
+  document.getElementById('stat-alerts').textContent = alertCount;
+  const feed = document.getElementById('alert-feed');
+  if (feed.children.length === 1 && feed.children[0].textContent.includes('Waiting')) feed.innerHTML = '';
+
+  const card = document.createElement('div');
+  card.className = 'slide-in rounded-xl p-3 border';
+  card.style.borderColor = '#fb5b5b40';
+  card.style.background = '#fb5b5b0c';
+  card.innerHTML = `
+    <div class="flex items-center justify-between mb-1">
+      <span class="text-xs font-bold" style="color:${seatColor(ev.seat_id)}">${ev.seat_id.toUpperCase()}</span>
+      <span class="text-[10px] mono text-slate-500">${ev.timestamp.toFixed(1)}s · risk ${ev.risk_score.toFixed(2)}</span>
+    </div>
+    <p class="text-xs text-slate-300 leading-snug mb-2">${ev.explanation}</p>
+    <button class="btn-dismiss text-[10px] mono px-2 py-1 rounded-md border border-white/10 text-slate-400" data-seat="${ev.seat_id}">
+      DISMISS — FALSE POSITIVE
+    </button>`;
+  card.querySelector('button').addEventListener('click', (e) => dismiss(ev.seat_id, e.target));
+  feed.prepend(card);
+  while (feed.children.length > 40) feed.removeChild(feed.lastChild);
+}
+
+function addFeedbackNote(ev) {
+  const feed = document.getElementById('alert-feed');
+  const note = document.createElement('div');
+  note.className = 'slide-in text-[11px] mono text-cyan-300 px-3 py-2 rounded-lg';
+  note.style.background = '#22d3ee14';
+  note.textContent = '↺ ' + ev.message;
+  feed.prepend(note);
+}
+
+async function dismiss(seatId, btn) {
+  btn.textContent = 'WIDENING THRESHOLD…';
+  btn.disabled = true;
+  try {
+    await fetch(`/api/alerts/${seatId}/dismiss`, { method: 'POST' });
+    btn.textContent = '✓ THRESHOLD WIDENED';
+    btn.classList.add('text-cyan-400');
+  } catch (e) {
+    btn.textContent = 'FAILED — RETRY';
+    btn.disabled = false;
+  }
+}
+
+// --- Stats ---
+function updateAvgRisk() {
+  const risks = Object.values(seatState).filter(s => s.calibrated).map(s => s.risk);
+  const avg = risks.length ? risks.reduce((a,b)=>a+b,0)/risks.length : 0;
+  document.getElementById('stat-avgrisk').textContent = avg.toFixed(2);
+}
+
+// --- Clock ---
+let sessionSeconds = 0;
+setInterval(() => {
+  sessionSeconds += 1;
+  const h = String(Math.floor(sessionSeconds/3600)).padStart(2,'0');
+  const m = String(Math.floor((sessionSeconds%3600)/60)).padStart(2,'0');
+  const s = String(sessionSeconds%60).padStart(2,'0');
+  document.getElementById('clock').textContent = `${h}:${m}:${s}`;
+}, 1000);
+
+// --- WebSocket ---
+function connect() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  const ws = new WebSocket(`${proto}://${location.host}/ws/live`);
+
+  ws.onopen = () => {
+    document.getElementById('conn-dot').className = 'w-2 h-2 rounded-full bg-emerald-400 pulse';
+    document.getElementById('conn-text').textContent = 'LIVE';
+    document.getElementById('conn-text').className = 'text-xs mono text-emerald-400';
+  };
+  ws.onclose = () => {
+    document.getElementById('conn-dot').className = 'w-2 h-2 rounded-full bg-red-500';
+    document.getElementById('conn-text').textContent = 'DISCONNECTED';
+    document.getElementById('conn-text').className = 'text-xs mono text-red-400';
+    setTimeout(connect, 2000);
+  };
+
+  ws.onmessage = (msg) => {
+    const ev = JSON.parse(msg.data);
+    if (ev.type === 'telemetry') {
+      const s = seatState[ev.seat_id] || (seatState[ev.seat_id] = {});
+      s.calibrated = true; s.risk = ev.risk_score; s.yaw_z = ev.yaw_z; s.motion_z = ev.motion_z;
+      pushRisk(ev.seat_id, ev.timestamp, ev.risk_score);
+      renderSeatGrid();
+      updateAvgRisk();
+    } else if (ev.type === 'calibrating') {
+      const s = seatState[ev.seat_id] || (seatState[ev.seat_id] = {});
+      s.calibrated = false; s.progress = ev.progress;
+      renderSeatGrid();
+    } else if (ev.type === 'alert') {
+      addAlert(ev);
+      flashSeat(ev.seat_id);
+    } else if (ev.type === 'feedback') {
+      addFeedbackNote(ev);
+    } else if (ev.type === 'seat_empty') {
+      // seat currently has nobody tracked to it — leave last known state displayed
+    }
+  };
+}
+connect();
+</script>
+</body>
+</html>

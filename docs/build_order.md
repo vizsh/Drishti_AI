@@ -34,5 +34,15 @@ breaks everything built on top of it — verify before moving on.
 
 ## Current stage
 
-Stage 1-2: ingestion + person detection, the first working end-to-end slice.
-See `ingestion/` and `perception/`.
+Stages 1-3 done and validated against real exam-hall footage
+(`data/test_videos/`, gitignored — supplied locally, not committed):
+- Ingestion + person detection (`ingestion/`, `perception/detector.py`)
+- BoT-SORT tracking (`perception/tracker.py`) — confirmed real ID churn on
+  real footage, motivating stage 3
+- Seat-anchoring homography (`calibration/`) — confirmed seat-level identity
+  is more stable than raw tracker IDs on the same footage
+
+Next: Stage 5, YOLO11-pose + One-Euro filtering (`perception/`), then
+Stage 4, the fine-tuned phone/paper/earpiece object detector, which needs a
+labeled dataset (own staged footage + Roboflow/Kaggle public sets — see
+docs/architecture.md §4).

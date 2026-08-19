@@ -81,11 +81,17 @@ Deferred, not abandoned — the rule-based signal above is designed to keep
 running alongside it once it exists, per the architecture doc's own
 "hybrid" guidance.
 
+Persistent event-log storage + analytics (`backend/db.py`) done — closes
+the "behavioral analytics and event logs for invigilator review" PS
+objective, which the in-memory-only alert feed didn't actually satisfy.
+SQLAlchemy over SQLite by default (neither Postgres nor Docker are
+available in this dev environment); DATABASE_URL swaps to a Postgres DSN
+for the production target with no schema/query changes. Verified a full
+page reload preserves the alert count and complete event history.
+
 Next: retrain the Stage 4 object detector once the 405 uploaded frames are
 labeled on Roboflow, then Jetson deployment packaging. Known open gaps vs.
 the PS's risk table (tracked honestly, not hidden): occlusion handling
 (multi-camera fusion, single camera only today), poor-lighting robustness
 (CLAHE preprocessing, not implemented), camera blind-spot coverage
-validator, persistent event-log storage for invigilator review (Postgres —
-alerts are in-memory/session-only right now), and evidence-clip storage
-with face-blurring + audit logging.
+validator, and evidence-clip storage with face-blurring + audit logging.

@@ -1,0 +1,4 @@
+# Stage 0-1: ingestion + person detection
+ultralytics>=8.3.0
+opencv-python>=4.10.0
+numpy>=1.26.0

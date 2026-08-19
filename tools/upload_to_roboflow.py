@@ -51,17 +51,24 @@ def ensure_project_exists(api_key: str) -> None:
     time.sleep(3)
 
 
-def upload_image(api_key: str, image_path: Path) -> tuple[bool, str]:
-    with open(image_path, "rb") as f:
-        resp = requests.post(
-            UPLOAD_URL,
-            params={"api_key": api_key, "name": image_path.name},
-            files={"file": (image_path.name, f, "image/jpeg")},
-            timeout=30,
-        )
-    if resp.status_code == 200:
-        return True, resp.json().get("id", "")
-    return False, resp.text[:200]
+def upload_image(api_key: str, image_path: Path, retries: int = 3) -> tuple[bool, str]:
+    last_error = ""
+    for attempt in range(retries):
+        try:
+            with open(image_path, "rb") as f:
+                resp = requests.post(
+                    UPLOAD_URL,
+                    params={"api_key": api_key, "name": image_path.name},
+                    files={"file": (image_path.name, f, "image/jpeg")},
+                    timeout=60,
+                )
+            if resp.status_code == 200:
+                return True, resp.json().get("id", "")
+            last_error = resp.text[:200]
+        except requests.exceptions.RequestException as exc:
+            last_error = str(exc)
+        time.sleep(2 * (attempt + 1))  # backoff before retry
+    return False, last_error
 
 
 def main() -> None:

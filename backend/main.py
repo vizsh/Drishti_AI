@@ -168,12 +168,22 @@ async def get_evidence_access_log(clip_id: str | None = None, limit: int = 200) 
     return {"log": await asyncio.to_thread(db.query_evidence_access, clip_id, limit)}
 
 
+_root_dir = Path(__file__).parent.parent
+_frontend_dist = _root_dir / "frontend" / "dist"
+_classic_dashboard = _root_dir / "dashboard"
+
+
 @app.get("/")
 async def index() -> FileResponse:
-    return FileResponse(Path(__file__).parent.parent / "dashboard" / "index.html")
+    # React frontend (frontend/) is the primary UI; the original vanilla
+    # dashboard stays reachable at /dashboard-classic as a fallback rather
+    # than being deleted — same working backend, two clients.
+    if (_frontend_dist / "index.html").exists():
+        return FileResponse(_frontend_dist / "index.html")
+    return FileResponse(_classic_dashboard / "index.html")
 
 
-_evidence_dir = Path(__file__).parent.parent / "data" / "evidence"
+_evidence_dir = _root_dir / "data" / "evidence"
 _evidence_dir.mkdir(parents=True, exist_ok=True)
 
 
@@ -192,5 +202,7 @@ async def get_evidence_manifest(clip_id: str, request: Request) -> FileResponse:
     return FileResponse(manifest_path, media_type="application/json")
 
 
-app.mount("/dashboard", StaticFiles(directory=Path(__file__).parent.parent / "dashboard"), name="dashboard")
+app.mount("/dashboard-classic", StaticFiles(directory=_classic_dashboard, html=True), name="dashboard-classic")
 app.mount("/evidence", StaticFiles(directory=_evidence_dir), name="evidence")
+if (_frontend_dist / "assets").exists():
+    app.mount("/assets", StaticFiles(directory=_frontend_dist / "assets"), name="frontend-assets")

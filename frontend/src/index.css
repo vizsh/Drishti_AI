@@ -1,0 +1,46 @@
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
+@import "tailwindcss";
+
+:root {
+  --bg-void: #060608;
+  --ink: #f4f1ea;
+  --ink-dim: #8b8578;
+  --accent: #ff5a36;
+  --accent-2: #ffb648;
+  --line: #ffffff14;
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg-void);
+  color: var(--ink);
+  font-family: 'Space Grotesk', ui-sans-serif, system-ui;
+  overflow-x: hidden;
+}
+
+.mono {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+}
+
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb { background: #ffffff20; border-radius: 8px; }
+::-webkit-scrollbar-thumb:hover { background: #ffffff35; }
+
+.noise-bg {
+  background-image:
+    radial-gradient(ellipse 1200px 600px at 10% -10%, #ff5a3618, transparent 60%),
+    radial-gradient(ellipse 900px 700px at 100% 0%, #ffb64812, transparent 60%),
+    linear-gradient(180deg, #060608 0%, #0a0a0d 100%);
+}
+
+.grid-texture {
+  background-image:
+    linear-gradient(rgba(255,255,255,0.028) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255,255,255,0.028) 1px, transparent 1px);
+  background-size: 46px 46px;
+}

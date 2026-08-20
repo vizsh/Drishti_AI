@@ -111,6 +111,18 @@ the new `SeatCalibration.project_inverse()`). 5 correctness tests passing.
 Verified live: seats 5-6 (on the demo's wider seating chart, never
 calibrated) correctly flagged BLIND SPOT with an actionable summary.
 
+Cross-checked an updated PS #1 PDF (added a "Technology Challenges"
+elaboration + hardware sizing tables — same core objectives/risk table).
+One concrete new requirement surfaced: item 10 "Explainability and Human
+Oversight" explicitly lists confidence scores alongside behavioural
+explanations and event timelines. Closed — `PoseResult.detection_
+confidence()` (perception/pose.py) now flows through every telemetry/alert
+event and the persisted log, with a dashed "LOW CONFIDENCE" seat-card state
+below 0.4 (the architecture doc's originally-planned but unbuilt
+"confidence-aware UI states" differentiator). Verified live: confidence
+varied realistically per seat (55-88%) and rendered correctly on a real
+alert ("conf 88%").
+
 Next: retrain the Stage 4 object detector once labeling is done, then
 Jetson deployment packaging. Known open gaps vs. the PS's risk table
 (tracked honestly, not hidden): occlusion handling (multi-camera fusion,

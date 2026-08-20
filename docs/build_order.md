@@ -142,6 +142,29 @@ blocked on external data:
   EvidenceAccessLog) — closes the Privacy Concerns risk row. Verified
   live: opened a real clip, confirmed a real logged access entry.
 
+Config-driven deployment (`config/deployment.json`,
+`backend/deployment_config.py`) — closes PS objective 12 ("adaptable and
+configurable... across multiple educational environments"). Deploying to
+a new room now means editing the config file, not the codebase; verified
+the refactor produces byte-identical behavior to the previous hardcoded
+version (parity check + all 14 tests + live server check).
+
+Two PS #2-overlap features — not a separate offline pipeline (explicit
+direction), but PS #2-named outputs (motion heatmaps, activity timelines)
+built as a free byproduct of frames PS #1's live pipeline already decodes:
+`perception/motion_heatmap.py` (session-wide motion heatmap, GET
+/api/heatmap, validated against real footage before wiring in) and a
+dashboard activity timeline built entirely from PS #1's own persisted
+event log.
+
+Frontend rebuilt in React (Vite + TypeScript + framer-motion + recharts +
+lucide-react, `frontend/`) — full feature parity with the vanilla
+dashboard, verified live against the real backend including the two most
+complex interactive paths (evidence playback, dismiss/feedback loop both
+confirmed hitting real endpoints, not just rendered). Original vanilla
+dashboard kept at /dashboard-classic, not deleted — same backend, two
+clients.
+
 Remaining, both blocked on the user's Roboflow labeling pass (0/388
 images labeled as of this session): retrain the Stage 4 object detector,
 and the ST-GCN++ behaviour classifier (needs labeled gesture clips too).

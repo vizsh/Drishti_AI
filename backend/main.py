@@ -216,6 +216,16 @@ async def get_session_report(seat_ids: str | None = None) -> Response:
     )
 
 
+@app.get("/api/seats/{seat_id}/baseline")
+async def get_seat_baseline(seat_id: str) -> dict:
+    """Part 2.6: personal-baseline numbers for the Digital Twin view — this
+    seat's own settling-window mean/std, not a flat threshold, since that's
+    the system's core differentiator the view exists to demonstrate."""
+    w = _worker_for_seat(seat_id)
+    baseline = w.seat_baseline(seat_id) if w is not None else None
+    return {"seat_id": seat_id, "calibrated": baseline is not None, "baseline": baseline}
+
+
 @app.get("/api/calibration-quality")
 async def get_calibration_quality() -> dict:
     """Part 2.5: live per-camera seat-anchor hit-rate, alongside the static

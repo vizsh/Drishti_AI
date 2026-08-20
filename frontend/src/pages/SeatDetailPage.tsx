@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { useParams, Link } from 'react-router-dom'
-import { ArrowLeft, Link2, Eye } from 'lucide-react'
+import { ArrowLeft, Link2, Eye, Fingerprint } from 'lucide-react'
 import { RiskTrendChart } from '../components/RiskTrendChart'
 import { AlertFeed } from '../components/AlertFeed'
 import { EvidenceModal } from '../components/EvidenceModal'
@@ -59,9 +59,18 @@ export function SeatDetailPage() {
         <div className="text-sm mono text-white/30 py-16 text-center">no data for {seatId} yet</div>
       ) : (
         <>
-          <div className="flex items-center gap-3 mb-6">
-            <h1 className="text-2xl font-bold">{seatId.replace('_', ' ').toUpperCase()}</h1>
-            <StatusBadge seat={seat} />
+          <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
+            <div className="flex items-center gap-3">
+              <h1 className="text-2xl font-bold">{seatId.replace('_', ' ').toUpperCase()}</h1>
+              <StatusBadge seat={seat} />
+            </div>
+            <Link
+              to={`/twin/${seatId}`}
+              className="flex items-center gap-1.5 text-[11px] mono px-3 py-1.5 rounded-full border"
+              style={{ borderColor: '#c4a3ff40', color: '#c4a3ff' }}
+            >
+              <Fingerprint size={12} /> behavioural profile
+            </Link>
           </div>
 
           {/* Everything that used to always render on the overview card now lives here */}

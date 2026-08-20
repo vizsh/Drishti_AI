@@ -224,6 +224,21 @@ class PipelineWorker(threading.Thread):
             }
         )
 
+    def seat_baseline(self, seat_id: str) -> Optional[dict]:
+        """Part 2.6: the raw personal-baseline numbers behind the Digital
+        Twin view — this seat's own settling-window mean/std, the actual
+        basis every z-score for this seat is measured against. None until
+        this seat's calibration completes."""
+        baseline = self.calibrator.baseline(seat_id)
+        if baseline is None:
+            return None
+        return {
+            "torso_yaw_mean": round(baseline.torso_yaw_mean, 3),
+            "torso_yaw_std": round(baseline.torso_yaw_std, 3),
+            "motion_mean": round(baseline.motion_mean, 3),
+            "motion_std": round(baseline.motion_std, 3),
+        }
+
     def calibration_quality(self) -> dict:
         """Part 2.5: live seat-anchor hit-rate signal for this camera —
         surfaced on the Pre-Exam Coverage panel alongside the static

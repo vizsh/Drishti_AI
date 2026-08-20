@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react'
 import { Header } from '../components/Header'
 import { StatStrip } from '../components/StatStrip'
 import { Sidebar } from '../components/Sidebar'
+import { ToastLayer } from '../components/ToastLayer'
 import { useLive } from '../state/LiveContext'
 import { useHallScope } from '../state/useHallScope'
 
@@ -34,6 +35,7 @@ export function AppLayout() {
 
   return (
     <div className="noise-bg grid-texture min-h-screen flex">
+      <ToastLayer />
       <Sidebar />
       <div className="flex-1 min-w-0 px-6">
         <div className="max-w-[1500px] mx-auto">

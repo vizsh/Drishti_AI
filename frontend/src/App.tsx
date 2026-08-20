@@ -7,6 +7,7 @@ import { LoginPage } from './pages/LoginPage'
 import { OverviewPage } from './pages/OverviewPage'
 import { CommandCenterPage } from './pages/CommandCenterPage'
 import { SeatDetailPage } from './pages/SeatDetailPage'
+import { DigitalTwinPage } from './pages/DigitalTwinPage'
 import { AlertsPage } from './pages/AlertsPage'
 import { AnalyticsPage } from './pages/AnalyticsPage'
 import { EvidenceVaultPage } from './pages/EvidenceVaultPage'
@@ -31,6 +32,7 @@ export default function App() {
               <Route path="/live" element={<Navigate to="/command-center" replace />} />
               <Route path="/overview" element={<OverviewPage />} />
               <Route path="/seat/:seatId" element={<SeatDetailPage />} />
+              <Route path="/twin/:seatId" element={<DigitalTwinPage />} />
               <Route path="/alerts" element={<AlertsPage />} />
               <Route path="/evidence-vault" element={<EvidenceVaultPage />} />
               <Route path="/analytics" element={<AnalyticsPage />} />

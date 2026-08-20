@@ -17,6 +17,7 @@ from fastapi.staticfiles import StaticFiles
 from backend import db
 from backend.deployment_config import DeploymentConfig, load_deployment_config
 from backend.pipeline_worker import PipelineWorker
+from backend.report import generate_session_report_pdf
 from calibration.coverage import CameraCoverageInput, validate_coverage
 
 app = FastAPI(title="KINESIS AI")
@@ -196,6 +197,23 @@ async def get_analytics(all_sessions: bool = False, seat_ids: str | None = None)
     sid = None if all_sessions else session_id
     scoped = seat_ids.split(",") if seat_ids else None
     return await asyncio.to_thread(db.analytics_summary, sid, scoped)
+
+
+@app.get("/api/report")
+async def get_session_report(seat_ids: str | None = None) -> Response:
+    """Phase 6: "Export Session Report" - pulls real session data (analytics
+    summary, full alert log with best-effort resolution correlation,
+    dispatch/resolution log) at export time, not a cached/static file.
+    seat_ids: optional hall-scoping filter, same pattern as /api/analytics,
+    so an Invigilator's export reflects only their assigned hall."""
+    scoped = seat_ids.split(",") if seat_ids else None
+    pdf_bytes = await asyncio.to_thread(generate_session_report_pdf, session_id, scoped)
+    filename = f"kinesis_session_{session_id}_report.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @app.get("/api/coverage")

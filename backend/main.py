@@ -145,11 +145,31 @@ async def get_cameras() -> dict:
 
 
 @app.post("/api/alerts/{seat_id}/dismiss")
-async def dismiss_alert(seat_id: str) -> dict:
+async def dismiss_alert(seat_id: str, body: dict | None = None) -> dict:
+    """Phase 4: extends the original dismiss-as-false-positive endpoint with
+    a resolution taxonomy (false_alarm/confirmed/no_action) instead of a
+    second, disconnected mechanism — same worker method, same feedback-loop
+    event path. body: {"resolution": "false_alarm"|"confirmed"|"no_action",
+    "invigilator": str | null}. Missing body/resolution defaults to
+    false_alarm, preserving the original one-click dismiss behaviour."""
+    resolution = (body or {}).get("resolution", "false_alarm")
+    invigilator = (body or {}).get("invigilator")
     w = _worker_for_seat(seat_id)
     if w is not None:
-        w.dismiss_alert(seat_id)
-    return {"status": "ok", "seat_id": seat_id}
+        w.resolve_alert(seat_id, resolution, invigilator)
+    return {"status": "ok", "seat_id": seat_id, "resolution": resolution}
+
+
+@app.post("/api/alerts/{seat_id}/dispatch")
+async def dispatch_invigilator(seat_id: str, body: dict) -> dict:
+    """Phase 4: "Dispatch Invigilator" action in the investigation view —
+    auto-filled invigilator name from the logged-in user, timestamp logged
+    server-side (created_at on the persisted event)."""
+    invigilator = body.get("invigilator", "unknown")
+    w = _worker_for_seat(seat_id)
+    if w is not None:
+        w.dispatch_invigilator(seat_id, invigilator)
+    return {"status": "ok", "seat_id": seat_id, "invigilator": invigilator}
 
 
 @app.get("/api/events")

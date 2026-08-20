@@ -7,7 +7,7 @@ import { useLive } from '../state/LiveContext'
 import { useHallScope } from '../state/useHallScope'
 
 export function OverviewPage() {
-  const { seats, alerts, feedback, dismissAlert } = useLive()
+  const { seats, alerts, feedback, dismissAlert, dispatchInvigilator } = useLive()
   const { isSeatInScope } = useHallScope()
   const [evidenceUrl, setEvidenceUrl] = useState<string | null>(null)
 
@@ -29,6 +29,7 @@ export function OverviewPage() {
             feedback={feedback}
             seatIds={seatIds}
             onDismiss={dismissAlert}
+            onDispatch={dispatchInvigilator}
             onViewEvidence={setEvidenceUrl}
             limit={8}
             showViewAllLink

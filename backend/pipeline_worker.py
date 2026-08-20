@@ -178,10 +178,48 @@ class PipelineWorker(threading.Thread):
             cam.stop()
 
     def dismiss_alert(self, seat_id: str) -> None:
-        """docs/architecture.md §10 feedback loop, wired to a real endpoint."""
-        self.calibrator.widen_threshold(seat_id)
+        """docs/architecture.md §10 feedback loop, wired to a real endpoint.
+        Kept as a thin alias for resolve_alert's "false_alarm" case — the
+        endpoint that used to call this directly still can."""
+        self.resolve_alert(seat_id, "false_alarm")
+
+    def resolve_alert(self, seat_id: str, resolution: str, invigilator: Optional[str] = None) -> None:
+        """Phase 4: dispatch/resolution audit trail, extending the existing
+        dismiss-as-feedback mechanism rather than adding a second, disconnected
+        one. Only "false_alarm" widens this seat's baseline threshold — that's
+        the one resolution that means the alert shouldn't have fired, which is
+        the actual signal the calibrator's feedback loop exists to consume
+        (docs/architecture.md §10). "confirmed"/"no_action" are logged for the
+        audit trail (same event_queue -> db.log_events path as every other
+        event) without touching calibration, since the alert was correct."""
+        if resolution == "false_alarm":
+            self.calibrator.widen_threshold(seat_id)
+            message = f"{seat_id} baseline widened (false positive dismissed)"
+        elif resolution == "confirmed":
+            message = f"{seat_id} alert confirmed by invigilator"
+        else:
+            message = f"{seat_id} resolved — no action taken"
         self.event_queue.put(
-            {"type": "feedback", "seat_id": seat_id, "message": f"{seat_id} baseline widened (false positive dismissed)"}
+            {
+                "type": "feedback",
+                "seat_id": seat_id,
+                "message": message,
+                "resolution": resolution,
+                "invigilator": invigilator,
+            }
+        )
+
+    def dispatch_invigilator(self, seat_id: str, invigilator: str) -> None:
+        """Phase 4: logs a dispatch action (who, when) as its own audited
+        event — separate from resolution since a dispatch can precede its
+        resolution by however long the invigilator takes to walk over."""
+        self.event_queue.put(
+            {
+                "type": "dispatch",
+                "seat_id": seat_id,
+                "message": f"{invigilator} dispatched to {seat_id}",
+                "invigilator": invigilator,
+            }
         )
 
     def render_heatmap_jpeg(self) -> Optional[bytes]:

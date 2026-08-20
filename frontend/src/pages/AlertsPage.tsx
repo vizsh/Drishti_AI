@@ -6,7 +6,7 @@ import { useLive } from '../state/LiveContext'
 import { useHallScope } from '../state/useHallScope'
 
 export function AlertsPage() {
-  const { seats, alerts, feedback, dismissAlert } = useLive()
+  const { seats, alerts, feedback, dismissAlert, dispatchInvigilator } = useLive()
   const { isSeatInScope } = useHallScope()
   const [evidenceUrl, setEvidenceUrl] = useState<string | null>(null)
   const seatIds = Object.keys(seats).filter(isSeatInScope)
@@ -14,7 +14,7 @@ export function AlertsPage() {
 
   return (
     <div>
-      <AlertFeed alerts={scopedAlerts} feedback={feedback} seatIds={seatIds} onDismiss={dismissAlert} onViewEvidence={setEvidenceUrl} />
+      <AlertFeed alerts={scopedAlerts} feedback={feedback} seatIds={seatIds} onDismiss={dismissAlert} onDispatch={dispatchInvigilator} onViewEvidence={setEvidenceUrl} />
       <EventLog onViewEvidence={setEvidenceUrl} />
       <EvidenceModal url={evidenceUrl} onClose={() => setEvidenceUrl(null)} />
     </div>

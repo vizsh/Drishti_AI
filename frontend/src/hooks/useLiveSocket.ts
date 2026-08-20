@@ -114,6 +114,7 @@ export function useLiveSocket() {
           break
         }
         case 'feedback':
+        case 'dispatch':
           setFeedback((prev) => [ev.message ?? '', ...prev].slice(0, 10))
           break
         case 'frame':
@@ -141,9 +142,33 @@ export function useLiveSocket() {
     }
   }, [flashSeat])
 
-  const dismissAlert = useCallback(async (seatId: string) => {
-    await fetch(`/api/alerts/${seatId}/dismiss`, { method: 'POST' })
+  const dismissAlert = useCallback(async (seatId: string, resolution: string = 'false_alarm', invigilator?: string) => {
+    await fetch(`/api/alerts/${seatId}/dismiss`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ resolution, invigilator }),
+    })
   }, [])
 
-  return { seats, riskHistory, alerts, connected, cameraOnline, detectorFinetuned, lightingEnhanced, feedImage, feedback, dismissAlert }
+  const dispatchInvigilator = useCallback(async (seatId: string, invigilator: string) => {
+    await fetch(`/api/alerts/${seatId}/dispatch`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ invigilator }),
+    })
+  }, [])
+
+  return {
+    seats,
+    riskHistory,
+    alerts,
+    connected,
+    cameraOnline,
+    detectorFinetuned,
+    lightingEnhanced,
+    feedImage,
+    feedback,
+    dismissAlert,
+    dispatchInvigilator,
+  }
 }

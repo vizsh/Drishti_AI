@@ -30,8 +30,10 @@ SessionLocal = sessionmaker(bind=engine)
 
 # Persisted event types: alerts/gestures/feedback are what invigilator
 # review actually needs; telemetry is also kept (lower value per-row, but
-# it's the only source for historical risk-trend analytics).
-PERSISTED_TYPES = ("telemetry", "alert", "gesture_alert", "feedback")
+# it's the only source for historical risk-trend analytics). "dispatch" is
+# Phase 4's audit trail for "who was sent to check on this seat, when" —
+# same log_events path as everything else, not a separate table.
+PERSISTED_TYPES = ("telemetry", "alert", "gesture_alert", "feedback", "dispatch")
 
 
 class Base(DeclarativeBase):

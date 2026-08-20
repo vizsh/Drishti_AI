@@ -1,28 +1,38 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { AnimatePresence, motion } from 'framer-motion'
-import { PlayCircle, X, ChevronDown } from 'lucide-react'
+import { PlayCircle, X, ChevronDown, UserPlus, Check, ShieldAlert, MinusCircle } from 'lucide-react'
 import type { AlertItem } from '../types'
 import { seatColor } from '../lib/colors'
 import { shortAlertSummary } from '../lib/shortSummary'
+import { useAuth } from '../state/AuthContext'
+
+type Resolution = 'false_alarm' | 'confirmed' | 'no_action'
 
 interface Props {
   alerts: AlertItem[]
   feedback: string[]
   seatIds: string[]
-  onDismiss: (seatId: string) => Promise<void>
+  onDismiss: (seatId: string, resolution?: Resolution, invigilator?: string) => Promise<void>
+  onDispatch?: (seatId: string, invigilator: string) => Promise<void>
   onViewEvidence: (url: string) => void
   limit?: number
   showViewAllLink?: boolean
 }
 
-export function AlertFeed({ alerts, feedback, seatIds, onDismiss, onViewEvidence, limit, showViewAllLink }: Props) {
-  const [dismissing, setDismissing] = useState<Set<string>>(new Set())
+export function AlertFeed({ alerts, feedback, seatIds, onDismiss, onDispatch, onViewEvidence, limit, showViewAllLink }: Props) {
+  const [resolved, setResolved] = useState<Map<string, Resolution>>(new Map())
+  const [dispatched, setDispatched] = useState<Map<string, string>>(new Map())
   const visible = limit ? alerts.slice(0, limit) : alerts
 
-  const handleDismiss = async (item: AlertItem) => {
-    setDismissing((prev) => new Set(prev).add(item.id))
-    await onDismiss(item.seatId)
+  const handleResolve = async (item: AlertItem, resolution: Resolution, invigilator?: string) => {
+    setResolved((prev) => new Map(prev).set(item.id, resolution))
+    await onDismiss(item.seatId, resolution, invigilator)
+  }
+
+  const handleDispatch = async (item: AlertItem, invigilator: string) => {
+    setDispatched((prev) => new Map(prev).set(item.id, invigilator))
+    if (onDispatch) await onDispatch(item.seatId, invigilator)
   }
 
   return (
@@ -46,7 +56,16 @@ export function AlertFeed({ alerts, feedback, seatIds, onDismiss, onViewEvidence
         )}
         <AnimatePresence initial={false}>
           {visible.map((item) => (
-            <AlertCard key={item.id} item={item} seatIds={seatIds} dismissing={dismissing.has(item.id)} onDismiss={handleDismiss} onViewEvidence={onViewEvidence} />
+            <AlertCard
+              key={item.id}
+              item={item}
+              seatIds={seatIds}
+              resolution={resolved.get(item.id) ?? null}
+              dispatchedTo={dispatched.get(item.id) ?? null}
+              onResolve={handleResolve}
+              onDispatch={handleDispatch}
+              onViewEvidence={onViewEvidence}
+            />
           ))}
         </AnimatePresence>
       </div>
@@ -57,16 +76,21 @@ export function AlertFeed({ alerts, feedback, seatIds, onDismiss, onViewEvidence
 function AlertCard({
   item,
   seatIds,
-  dismissing,
-  onDismiss,
+  resolution,
+  dispatchedTo,
+  onResolve,
+  onDispatch,
   onViewEvidence,
 }: {
   item: AlertItem
   seatIds: string[]
-  dismissing: boolean
-  onDismiss: (item: AlertItem) => void
+  resolution: Resolution | null
+  dispatchedTo: string | null
+  onResolve: (item: AlertItem, resolution: Resolution, invigilator?: string) => void
+  onDispatch: (item: AlertItem, invigilator: string) => void
   onViewEvidence: (url: string) => void
 }) {
+  const { user } = useAuth()
   const [expanded, setExpanded] = useState(false)
   const isGesture = item.kind === 'gesture'
   // Gesture explanations are already short/human (behaviour/gestures.py) —
@@ -123,22 +147,63 @@ function AlertCard({
         <p className="text-[10px] mono text-white/40 mb-2">⚠ low detection confidence — treat as a prompt to look, not evidence</p>
       )}
       {item.kind === 'alert' && (
-        <div className="flex gap-2">
-          <button
-            onClick={() => onDismiss(item)}
-            disabled={dismissing}
-            className="flex items-center gap-1 text-[10px] mono px-2 py-1 rounded-md border border-white/12 text-white/50 hover:border-white/30"
-          >
-            <X size={11} /> {dismissing ? 'widened ✓' : 'dismiss — false positive'}
-          </button>
-          {item.evidenceUrl && (
-            <button
-              onClick={() => onViewEvidence(item.evidenceUrl!)}
-              className="flex items-center gap-1 text-[10px] mono px-2 py-1 rounded-md border"
-              style={{ borderColor: '#5ad1ff40', color: '#5ad1ff' }}
-            >
-              <PlayCircle size={11} /> view evidence
-            </button>
+        <div className="flex flex-col gap-2">
+          <div className="flex flex-wrap gap-2">
+            {item.evidenceUrl && (
+              <button
+                onClick={() => onViewEvidence(item.evidenceUrl!)}
+                className="flex items-center gap-1 text-[10px] mono px-2 py-1 rounded-md border"
+                style={{ borderColor: '#5ad1ff40', color: '#5ad1ff' }}
+              >
+                <PlayCircle size={11} /> view evidence
+              </button>
+            )}
+            {!dispatchedTo && !resolution && (
+              <button
+                onClick={() => onDispatch(item, user?.name ?? 'unknown')}
+                className="flex items-center gap-1 text-[10px] mono px-2 py-1 rounded-md border border-white/12 text-white/50 hover:border-white/30"
+              >
+                <UserPlus size={11} /> dispatch invigilator
+              </button>
+            )}
+          </div>
+
+          {dispatchedTo && !resolution && (
+            <p className="text-[10px] mono text-white/40">↳ dispatched to {dispatchedTo}</p>
+          )}
+
+          {!resolution && (
+            <div className="flex flex-wrap gap-2">
+              <span className="text-[10px] mono text-white/35 self-center">resolve:</span>
+              <button
+                onClick={() => onResolve(item, 'false_alarm', dispatchedTo ?? undefined)}
+                className="flex items-center gap-1 text-[10px] mono px-2 py-1 rounded-md border border-white/12 text-white/50 hover:border-white/30"
+              >
+                <X size={11} /> false alarm
+              </button>
+              <button
+                onClick={() => onResolve(item, 'confirmed', dispatchedTo ?? undefined)}
+                className="flex items-center gap-1 text-[10px] mono px-2 py-1 rounded-md border"
+                style={{ borderColor: '#ff5a3640', color: '#ff5a36' }}
+              >
+                <ShieldAlert size={11} /> confirmed issue
+              </button>
+              <button
+                onClick={() => onResolve(item, 'no_action', dispatchedTo ?? undefined)}
+                className="flex items-center gap-1 text-[10px] mono px-2 py-1 rounded-md border border-white/12 text-white/50 hover:border-white/30"
+              >
+                <MinusCircle size={11} /> no action
+              </button>
+            </div>
+          )}
+
+          {resolution && (
+            <p className="flex items-center gap-1 text-[10px] mono" style={{ color: resolution === 'confirmed' ? '#ff5a36' : '#8bd17a' }}>
+              <Check size={11} />
+              {resolution === 'false_alarm' && 'resolved — false alarm (baseline widened)'}
+              {resolution === 'confirmed' && 'resolved — confirmed issue'}
+              {resolution === 'no_action' && 'resolved — no action taken'}
+            </p>
           )}
         </div>
       )}

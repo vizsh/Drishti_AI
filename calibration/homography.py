@@ -64,6 +64,17 @@ class SeatCalibration:
         x, y = projected[0, 0]
         return (float(x), float(y))
 
+    def project_inverse(self, plane_point: Point2D) -> Point2D:
+        """Plane coordinate -> image pixel (inverse of project()). Used by
+        the coverage validator (calibration/coverage.py) to check a seat's
+        calibrated position actually falls inside this camera's real image
+        frame, not just that it's algebraically reachable."""
+        inv_matrix = np.linalg.inv(self._matrix)
+        pt = np.array([[plane_point]], dtype=np.float32)
+        projected = cv2.perspectiveTransform(pt, inv_matrix)
+        x, y = projected[0, 0]
+        return (float(x), float(y))
+
     def nearest_seat(self, image_point: Point2D) -> Tuple[Optional[str], float]:
         """Image pixel -> (seat_id, distance in plane units). seat_id is None
         if nothing is within max_snap_distance (e.g. a passing invigilator,

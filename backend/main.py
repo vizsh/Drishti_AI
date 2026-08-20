@@ -16,8 +16,15 @@ from fastapi.staticfiles import StaticFiles
 
 from backend import db
 from backend.pipeline_worker import PipelineWorker
+from calibration.coverage import CameraCoverageInput, validate_coverage
 
 VIDEO_PATH = "data/test_videos/04.CCTV Candidate Talking.mkv"
+DEMO_FRAME_SIZE = (640, 480)  # data/test_videos/04's actual resolution
+
+# The institution's full seating chart, in a real deployment — deliberately
+# wider than the 4 seats actually calibrated in this demo, so the coverage
+# check has real blind spots to report rather than always passing.
+EXPECTED_SEAT_IDS = ["seat_1", "seat_2", "seat_3", "seat_4", "seat_5", "seat_6"]
 
 app = FastAPI(title="KINESIS AI")
 
@@ -117,6 +124,27 @@ async def get_analytics(all_sessions: bool = False) -> dict:
     """PS #1 objective: "behavioral analytics ... for invigilator review"."""
     sid = None if all_sessions else session_id
     return await asyncio.to_thread(db.analytics_summary, sid)
+
+
+@app.get("/api/coverage")
+async def get_coverage() -> dict:
+    """Pre-exam camera blind-spot check (docs/architecture.md §13,
+    differentiator #10) — run before an exam starts, not discovered mid-exam
+    when a student in a blind spot goes unmonitored. EXPECTED_SEAT_IDS
+    stands in for a real institution's seating chart in this demo."""
+    if worker is None:
+        return {"results": []}
+    width, height = DEMO_FRAME_SIZE
+    camera = CameraCoverageInput(worker.seat_cal.camera_id, worker.seat_cal, width, height)
+    results = validate_coverage(EXPECTED_SEAT_IDS, [camera])
+    return {
+        "results": [
+            {"seat_id": r.seat_id, "covered": r.covered, "covering_cameras": r.covering_cameras, "reason": r.reason}
+            for r in results
+        ],
+        "total": len(results),
+        "covered_count": sum(1 for r in results if r.covered),
+    }
 
 
 @app.get("/")

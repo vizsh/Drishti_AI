@@ -122,6 +122,19 @@
     </div>
   </div>
 
+  <!-- Pre-exam coverage check -->
+  <div class="glass rounded-2xl p-4 mb-6">
+    <div class="flex items-center justify-between mb-3">
+      <div>
+        <h2 class="text-sm font-semibold tracking-wide">PRE-EXAM SETUP — CAMERA COVERAGE CHECK</h2>
+        <p class="text-[10px] mono text-slate-500">run before the exam starts · flags blind spots before a student goes unmonitored, not after</p>
+      </div>
+      <button id="coverage-run" class="text-xs mono px-3 py-1.5 rounded-lg border border-cyan-500/30 text-cyan-300 hover:bg-cyan-500/10">RUN CHECK</button>
+    </div>
+    <div id="coverage-results" class="grid grid-cols-3 md:grid-cols-6 gap-2"></div>
+    <p id="coverage-summary" class="text-xs mono text-slate-400 mt-3"></p>
+  </div>
+
   <div class="grid grid-cols-4 gap-6">
 
     <!-- Live feed -->
@@ -476,6 +489,34 @@ function updateAvgRisk() {
   const avg = risks.length ? risks.reduce((a,b)=>a+b,0)/risks.length : 0;
   document.getElementById('stat-avgrisk').textContent = avg.toFixed(2);
 }
+
+// --- Pre-exam coverage check ---
+async function runCoverageCheck() {
+  const btn = document.getElementById('coverage-run');
+  const results = document.getElementById('coverage-results');
+  const summary = document.getElementById('coverage-summary');
+  btn.textContent = 'CHECKING…'; btn.disabled = true;
+  try {
+    const res = await fetch('/api/coverage');
+    const data = await res.json();
+    results.innerHTML = data.results.map(r => `
+      <div class="rounded-xl p-3 border text-center" style="border-color:${r.covered ? '#34d39940' : '#fb5b5b50'}; background:${r.covered ? '#34d39910' : '#fb5b5b12'}">
+        <div class="text-xs font-bold mb-1">${r.seat_id.toUpperCase()}</div>
+        <div class="text-[10px] mono ${r.covered ? 'text-emerald-400' : 'text-red-400'}">${r.covered ? '✓ COVERED' : '⚠ BLIND SPOT'}</div>
+        ${!r.covered ? `<div class="text-[9px] mono text-slate-500 mt-1 leading-tight">${r.reason}</div>` : ''}
+      </div>`).join('');
+    const gaps = data.total - data.covered_count;
+    summary.textContent = gaps === 0
+      ? `All ${data.total} seats on the chart are covered — safe to start.`
+      : `${gaps} of ${data.total} seats have NO camera coverage — resolve before starting the exam.`;
+    summary.className = 'text-xs mono mt-3 ' + (gaps === 0 ? 'text-emerald-400' : 'text-red-400');
+  } catch (e) {
+    summary.textContent = 'coverage check failed — is the backend running?';
+  }
+  btn.textContent = 'RUN CHECK'; btn.disabled = false;
+}
+document.getElementById('coverage-run').addEventListener('click', runCoverageCheck);
+runCoverageCheck();
 
 // --- Event log (persisted, Stage: event-log storage) ---
 const typeBadge = {

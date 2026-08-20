@@ -10,7 +10,7 @@ import asyncio
 import queue
 from pathlib import Path
 
-from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, Response, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -143,6 +143,21 @@ async def get_coverage() -> dict:
         "total": len(results),
         "covered_count": sum(1 for r in results if r.covered),
     }
+
+
+@app.get("/api/heatmap")
+async def get_heatmap() -> Response:
+    """Session-wide motion heatmap (perception/motion_heatmap.py) — a
+    PS #2-style output ("motion heatmaps") computed as a free byproduct of
+    frames PS #1's live pipeline already decodes, not a separate offline
+    pass. Useful for PS #1 directly: an invigilator can see at a glance
+    where activity concentrated in the room over the whole session."""
+    if worker is None:
+        return Response(status_code=503, content=b"pipeline not ready yet")
+    jpeg_bytes = await asyncio.to_thread(worker.render_heatmap_jpeg)
+    if jpeg_bytes is None:
+        return Response(status_code=503, content=b"no frames processed yet")
+    return Response(content=jpeg_bytes, media_type="image/jpeg")
 
 
 @app.get("/api/evidence-access-log")

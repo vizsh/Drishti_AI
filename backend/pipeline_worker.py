@@ -27,6 +27,7 @@ from backend.deployment_config import CameraConfig, DeploymentConfig, load_deplo
 from backend.evidence import EVIDENCE_DIR, RollingFrameBuffer, estimate_head_bbox, save_evidence_clip
 from ingestion.video_source import VideoSource
 from perception.lighting import enhance_if_dark
+from perception.motion_heatmap import MotionHeatmapAccumulator
 from perception.object_detector import ObjectDetector
 from perception.pose import LEFT_SHOULDER, RIGHT_SHOULDER, PoseEstimator
 from risk_engine.scorer import RiskEngine
@@ -142,6 +143,8 @@ class PipelineWorker(threading.Thread):
         self.gesture_detector = GestureDetector(self.seat_cal)
         self.pose_estimator = PoseEstimator(device=device)
         self.frame_buffer = RollingFrameBuffer(max_seconds=35.0)
+        self.heatmap: Optional[MotionHeatmapAccumulator] = None  # lazily sized on first frame
+        self._last_raw_frame = None
 
         # v1 fine-tune only, per docs/architecture.md §4 — known to overfit on
         # background objects (found via Stage 4 validation), so its output is
@@ -171,6 +174,15 @@ class PipelineWorker(threading.Thread):
             {"type": "feedback", "seat_id": seat_id, "message": f"{seat_id} baseline widened (false positive dismissed)"}
         )
 
+    def render_heatmap_jpeg(self) -> Optional[bytes]:
+        """Current session motion heatmap as JPEG bytes, or None before the
+        first frame has been processed."""
+        if self.heatmap is None or self._last_raw_frame is None:
+            return None
+        overlay = self.heatmap.render(base_image=self._last_raw_frame)
+        ok, buf = cv2.imencode(".jpg", overlay, [cv2.IMWRITE_JPEG_QUALITY, 85])
+        return buf.tobytes() if ok else None
+
     def run(self) -> None:
         self._start_wall_time = time.time()
         for cam in self.secondary_cameras:
@@ -188,6 +200,14 @@ class PipelineWorker(threading.Thread):
                     break
                 sim_time = time.time() - self._start_wall_time  # monotonic clock for calibration/risk logic
                 self._frame_counter += 1
+
+                # Session motion heatmap (perception/motion_heatmap.py) — a
+                # PS #2-style output computed as a free byproduct of frames
+                # this pipeline already decodes, not a second processing pass.
+                if self.heatmap is None:
+                    self.heatmap = MotionHeatmapAccumulator(frame.image.shape[:2])
+                self.heatmap.update(frame.image)
+                self._last_raw_frame = frame.image
 
                 # Lighting robustness (docs/architecture.md §8, PS risk row
                 # "Poor Lighting Conditions"): enhance only the copy fed to

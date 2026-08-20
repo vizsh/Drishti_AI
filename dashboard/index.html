@@ -178,6 +178,25 @@
 
   </div>
 
+  <!-- Session analytics: motion heatmap + activity timeline -->
+  <div class="mt-8 grid grid-cols-3 gap-6">
+    <div class="col-span-1">
+      <h2 class="text-sm font-semibold text-slate-400 mb-3 tracking-wide">MOTION HEATMAP <span class="text-slate-600">— session-wide</span></h2>
+      <div class="glass rounded-2xl p-2 relative overflow-hidden" style="aspect-ratio:4/3;">
+        <img id="heatmap-img" class="w-full h-full object-cover rounded-xl" />
+        <div id="heatmap-placeholder" class="absolute inset-0 flex items-center justify-center text-xs text-slate-500 mono">building heatmap…</div>
+      </div>
+      <p class="text-[10px] mono text-slate-500 mt-2">accumulated frame-to-frame motion, this session · where activity concentrated in the room</p>
+    </div>
+    <div class="col-span-2">
+      <h2 class="text-sm font-semibold text-slate-400 mb-3 tracking-wide">ACTIVITY TIMELINE <span class="text-slate-600">— last 5 min, per seat</span></h2>
+      <div class="glass rounded-2xl p-4" id="timeline-container">
+        <div id="timeline-lanes" class="flex flex-col gap-2"></div>
+        <div class="flex justify-between text-[9px] mono text-slate-600 mt-2" id="timeline-axis"></div>
+      </div>
+    </div>
+  </div>
+
   <!-- Event log -->
   <div class="mt-8">
     <div class="flex items-center justify-between mb-3">
@@ -596,11 +615,71 @@ async function refreshAnalytics() {
   } catch (e) { /* keep last known value */ }
 }
 
+// --- Motion heatmap (session-wide, PS #2-style output computed free of a
+// second processing pass — see perception/motion_heatmap.py) ---
+function refreshHeatmap() {
+  const img = document.getElementById('heatmap-img');
+  img.onload = () => { document.getElementById('heatmap-placeholder').style.display = 'none'; };
+  img.src = '/api/heatmap?t=' + Date.now();
+}
+
+// --- Activity timeline (PS #2-style output, built from PS #1's own event
+// log — a swimlane per seat, markers for alert/gesture events) ---
+const TIMELINE_WINDOW_S = 300;
+async function refreshTimeline() {
+  try {
+    // Two type-filtered queries, not one unfiltered pull — alert/gesture
+    // events are a tiny fraction of the high-volume telemetry stream, so an
+    // unfiltered limit=N query would mostly return telemetry rows and could
+    // silently drop real alerts from the timeline.
+    const [alertsRes, gesturesRes] = await Promise.all([
+      fetch(`/api/events?event_type=alert&limit=150`),
+      fetch(`/api/events?event_type=gesture_alert&limit=150`),
+    ]);
+    const [alertsData, gesturesData] = await Promise.all([alertsRes.json(), gesturesRes.json()]);
+    const allEvents = [...alertsData.events, ...gesturesData.events];
+    const bySeat = {};
+    let maxT = 0;
+    for (const ev of allEvents) {
+      (bySeat[ev.seat_id] = bySeat[ev.seat_id] || []).push(ev);
+      maxT = Math.max(maxT, ev.sim_time);
+    }
+    const windowStart = Math.max(0, maxT - TIMELINE_WINDOW_S);
+    const lanes = document.getElementById('timeline-lanes');
+    const seatIds = Object.keys(bySeat).sort();
+    if (!seatIds.length) {
+      lanes.innerHTML = '<div class="text-xs text-slate-500 mono py-6 text-center">no alert or gesture events yet this session</div>';
+      document.getElementById('timeline-axis').innerHTML = '';
+      return;
+    }
+    lanes.innerHTML = seatIds.map(seatId => {
+      const events = bySeat[seatId].filter(e => e.sim_time >= windowStart);
+      const markers = events.map(ev => {
+        const pct = Math.min(100, Math.max(0, ((ev.sim_time - windowStart) / TIMELINE_WINDOW_S) * 100));
+        const color = ev.event_type === 'alert' ? '#fb5b5b' : '#a78bfa';
+        const title = `${ev.sim_time.toFixed(1)}s — ${ev.explanation || ''}`;
+        return `<div class="absolute top-0 bottom-0 w-1 rounded-full" style="left:${pct}%; background:${color}" title="${title.replace(/"/g,'&quot;')}"></div>`;
+      }).join('');
+      return `
+        <div class="flex items-center gap-3">
+          <span class="text-[10px] mono w-14 shrink-0" style="color:${seatColor(seatId)}">${seatId.toUpperCase()}</span>
+          <div class="relative flex-1 h-4 rounded-full bg-white/5">${markers}</div>
+        </div>`;
+    }).join('');
+    document.getElementById('timeline-axis').innerHTML =
+      `<span>-${TIMELINE_WINDOW_S}s</span><span>now (${maxT.toFixed(0)}s)</span>`;
+  } catch (e) { /* keep last known state */ }
+}
+
 setInterval(loadEventLog, 8000);
 setInterval(refreshAnalytics, 4000);
 setInterval(populateSeatFilter, 5000);
+setInterval(refreshHeatmap, 10000);
+setInterval(refreshTimeline, 6000);
 loadEventLog();
 refreshAnalytics();
+refreshHeatmap();
+refreshTimeline();
 
 // --- Clock ---
 let sessionSeconds = 0;

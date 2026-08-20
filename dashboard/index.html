@@ -377,18 +377,22 @@ function renderSeatGrid() {
   document.getElementById('stat-seats').textContent = ids.length || '—';
   document.getElementById('stat-calibrated').textContent = ids.filter(id => seatState[id].calibrated).length;
 
+  const LOW_CONFIDENCE_THRESHOLD = 0.4;
+
   grid.innerHTML = ids.map(id => {
     const s = seatState[id];
+    const lowConfidence = s.calibrated && s.confidence != null && s.confidence < LOW_CONFIDENCE_THRESHOLD;
     const level = s.calibrated ? riskLevel(s.risk) : 'calibrating';
-    const color = s.calibrated ? levelColor[level] : '#64748b';
-    const glow = s.calibrated ? levelGlow[level] : '';
+    const color = lowConfidence ? '#94a3b8' : (s.calibrated ? levelColor[level] : '#64748b');
+    const glow = lowConfidence ? '' : (s.calibrated ? levelGlow[level] : '');
     const pct = s.calibrated ? Math.min(100, s.risk * 100) : (s.progress * 100 || 0);
+    const badge = !s.calibrated ? 'CALIBRATING' : (lowConfidence ? 'LOW CONFIDENCE' : level.toUpperCase());
     return `
-      <div class="seat-card glass rounded-2xl p-4 ${glow} ${s.flash ? 'flash' : ''}" style="border-color:${color}40">
+      <div class="seat-card glass rounded-2xl p-4 ${glow} ${s.flash ? 'flash' : ''}" style="border-color:${color}40; ${lowConfidence ? 'border-style:dashed;' : ''}">
         <div class="flex items-center justify-between mb-2">
           <span class="font-bold text-sm">${id.replace('_',' ').toUpperCase()}</span>
           <span class="text-[10px] mono px-2 py-0.5 rounded-full" style="background:${color}22; color:${color}">
-            ${s.calibrated ? level.toUpperCase() : 'CALIBRATING'}
+            ${badge}
           </span>
         </div>
         <div class="w-full h-2 rounded-full bg-white/5 overflow-hidden mb-2">
@@ -398,6 +402,13 @@ function renderSeatGrid() {
           <span>${s.calibrated ? 'risk ' + s.risk.toFixed(2) : (s.progress*100).toFixed(0) + '% settled'}</span>
           <span>${s.calibrated ? 'yaw_z ' + (s.yaw_z ?? '—') : ''}</span>
         </div>
+        ${s.calibrated && s.confidence != null ? `
+        <div class="mt-2 pt-2 border-t border-white/5 flex items-center justify-between text-[10px] mono">
+          <span class="text-slate-500">detection confidence</span>
+          <span class="${lowConfidence ? 'text-slate-400' : 'text-slate-400'}">${(s.confidence*100).toFixed(0)}%</span>
+        </div>
+        ${lowConfidence ? `<div class="text-[9px] mono text-slate-400 mt-1">⚠ visual check recommended — risk score may be unreliable this frame</div>` : ''}
+        ` : ''}
       </div>`;
   }).join('');
 }
@@ -442,12 +453,16 @@ function addAlert(ev) {
   const objBadge = ev.object_label
     ? `<span class="text-[9px] mono px-1.5 py-0.5 rounded bg-orange-500/15 text-orange-300 mr-1" title="v1 detector known to overfit on real footage — unverified">${ev.object_label.toUpperCase()} ⚠ UNVERIFIED</span>`
     : '';
+  const lowConfNote = (ev.confidence != null && ev.confidence < 0.4)
+    ? `<p class="text-[10px] mono text-slate-400 mb-2">⚠ low detection confidence (${(ev.confidence*100).toFixed(0)}%) — treat this alert as a prompt to look, not as evidence</p>`
+    : '';
   card.innerHTML = `
     <div class="flex items-center justify-between mb-1">
       <span class="text-xs font-bold" style="color:${seatColor(ev.seat_id)}">${ev.seat_id.toUpperCase()}</span>
-      <span class="text-[10px] mono text-slate-500">${ev.timestamp.toFixed(1)}s · risk ${ev.risk_score.toFixed(2)}</span>
+      <span class="text-[10px] mono text-slate-500">${ev.timestamp.toFixed(1)}s · risk ${ev.risk_score.toFixed(2)}${ev.confidence != null ? ' · conf ' + (ev.confidence*100).toFixed(0) + '%' : ''}</span>
     </div>
     <p class="text-xs text-slate-300 leading-snug mb-2">${objBadge}${ev.explanation}</p>
+    ${lowConfNote}
     <div class="flex gap-2">
       <button class="btn-dismiss text-[10px] mono px-2 py-1 rounded-md border border-white/10 text-slate-400" data-action="dismiss">
         DISMISS — FALSE POSITIVE
@@ -616,7 +631,7 @@ function connect() {
     const ev = JSON.parse(msg.data);
     if (ev.type === 'telemetry') {
       const s = seatState[ev.seat_id] || (seatState[ev.seat_id] = {});
-      s.calibrated = true; s.risk = ev.risk_score; s.yaw_z = ev.yaw_z; s.motion_z = ev.motion_z;
+      s.calibrated = true; s.risk = ev.risk_score; s.yaw_z = ev.yaw_z; s.motion_z = ev.motion_z; s.confidence = ev.confidence;
       pushRisk(ev.seat_id, ev.timestamp, ev.risk_score);
       renderSeatGrid();
       updateAvgRisk();

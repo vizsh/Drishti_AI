@@ -58,6 +58,7 @@ class EventLog(Base):
     object_label: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
     explanation: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     evidence_url: Mapped[Optional[str]] = mapped_column(String(300), nullable=True)
+    confidence: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
 
 
@@ -92,6 +93,7 @@ def log_events(session_id: int, events: list[dict]) -> None:
                 object_label=ev.get("object_label"),
                 explanation=ev.get("explanation") or ev.get("message"),
                 evidence_url=ev.get("evidence_url"),
+                confidence=ev.get("confidence"),
             )
         )
     if not rows:
@@ -132,6 +134,7 @@ def query_events(
                 "object_label": r.object_label,
                 "explanation": r.explanation,
                 "evidence_url": r.evidence_url,
+                "confidence": r.confidence,
                 "created_at": r.created_at.isoformat() if r.created_at else None,
             }
             for r in rows

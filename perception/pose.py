@@ -75,6 +75,21 @@ class PoseResult:
         shoulder_width = abs(rs[0] - ls[0]) or 1.0
         return (shoulder_mid_x - hip_mid_x) / shoulder_width
 
+    def detection_confidence(self) -> float:
+        """Overall reliability of this frame's pose for behaviour scoring —
+        not the same thing as risk_score. PS #1's explainability requirement
+        (updated PDF, "Explainability and Human Oversight") lists confidence
+        scores alongside behavioural explanations and event timelines as a
+        required output: an alert must say how reliable its own inputs were,
+        not just what it concluded. Averages the keypoints that actually
+        drive Stage 6-8's signals (shoulders/hips for torso_yaw, wrists for
+        hand_reach_across) rather than all 17 — ankle confidence, for
+        instance, is irrelevant to any behaviour signal this system computes.
+        """
+        idxs = [LEFT_SHOULDER, RIGHT_SHOULDER, LEFT_HIP, RIGHT_HIP, 9, 10]  # + wrists
+        values = [self.keypoint_confidence[i] for i in idxs]
+        return sum(values) / len(values)
+
 
 class PoseEstimator:
     def __init__(

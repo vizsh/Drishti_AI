@@ -213,6 +213,7 @@ class PipelineWorker(threading.Thread):
 
                     level = "alert" if assessment.risk_score >= 0.5 else ("elevated" if assessment.risk_score >= 0.25 else "calm")
                     seat_risk_this_frame[seat_id] = level
+                    detection_confidence = round(p.detection_confidence(), 2)
                     if vis is not None:
                         self._draw_person(vis, p, seat_id, level, assessment.risk_score)
 
@@ -225,6 +226,7 @@ class PipelineWorker(threading.Thread):
                             "yaw_z": round(yaw_z, 2) if yaw_z is not None else None,
                             "motion_z": round(motion_z, 2),
                             "object_label": object_label,
+                            "confidence": detection_confidence,
                         }
                     )
                     if assessment.explanation:
@@ -237,6 +239,7 @@ class PipelineWorker(threading.Thread):
                                 "risk_score": round(assessment.risk_score, 3),
                                 "explanation": assessment.explanation,
                                 "object_label": object_label,
+                                "confidence": detection_confidence,
                                 "evidence_url": evidence_url,
                             }
                         )

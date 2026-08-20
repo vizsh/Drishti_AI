@@ -206,6 +206,85 @@
   </footer>
 </div>
 
+<!-- Evidence modal -->
+<div id="evidence-modal" class="fixed inset-0 z-50 hidden items-center justify-center" style="background:#000000b0; backdrop-filter:blur(4px);">
+  <div class="glass rounded-2xl p-4 max-w-2xl w-full mx-4">
+    <div class="flex items-center justify-between mb-3">
+      <div>
+        <h3 class="text-sm font-bold">EVIDENCE CLIP</h3>
+        <p class="text-[10px] mono text-slate-500">faces auto-blurred before storage · face-blurred clip is the only raw-video artifact that leaves the edge boundary</p>
+      </div>
+      <button id="evidence-close" class="text-slate-400 hover:text-white text-lg leading-none px-2">&times;</button>
+    </div>
+    <div class="w-full rounded-xl bg-black flex items-center justify-center overflow-hidden" style="aspect-ratio:16/9;">
+      <img id="evidence-frame" class="max-w-full max-h-full" />
+    </div>
+    <div class="flex items-center justify-center gap-3 mt-2">
+      <button id="evidence-playpause" class="text-xs mono px-3 py-1 rounded-md border border-white/10 text-slate-300">⏸ PAUSE</button>
+      <span id="evidence-frame-count" class="text-[10px] mono text-slate-500"></span>
+    </div>
+    <p id="evidence-status" class="text-xs mono text-slate-500 mt-2 text-center"></p>
+  </div>
+</div>
+
+<script>
+// Evidence clips are a face-blurred JPEG sequence + manifest (no working
+// H.264 encoder in this environment — see backend/evidence.py), played
+// back client-side at the clip's original fps.
+let evidencePlayer = { frames: [], baseUrl: '', idx: 0, fps: 10, timer: null, playing: true };
+
+async function openEvidence(manifestUrl) {
+  const modal = document.getElementById('evidence-modal');
+  const status = document.getElementById('evidence-status');
+  const img = document.getElementById('evidence-frame');
+  modal.classList.remove('hidden'); modal.classList.add('flex');
+  status.textContent = 'loading clip…';
+  stopEvidencePlayback();
+
+  try {
+    const res = await fetch(manifestUrl + '?t=' + Date.now());
+    if (!res.ok) throw new Error('not ready');
+    const manifest = await res.json();
+    evidencePlayer.baseUrl = manifestUrl.replace(/manifest\.json.*$/, '');
+    evidencePlayer.frames = manifest.frames;
+    evidencePlayer.fps = manifest.fps || 10;
+    evidencePlayer.idx = 0;
+    evidencePlayer.playing = true;
+    document.getElementById('evidence-frame-count').textContent = `${manifest.frame_count} frames · ${manifest.fps.toFixed?.(1) ?? manifest.fps} fps`;
+    status.textContent = '';
+    playEvidenceFrame();
+    evidencePlayer.timer = setInterval(advanceEvidenceFrame, 1000 / evidencePlayer.fps);
+  } catch (e) {
+    status.textContent = 'clip still encoding — click the button again in a moment';
+  }
+}
+
+function playEvidenceFrame() {
+  const img = document.getElementById('evidence-frame');
+  const f = evidencePlayer.frames[evidencePlayer.idx];
+  if (f) img.src = evidencePlayer.baseUrl + f;
+}
+function advanceEvidenceFrame() {
+  if (!evidencePlayer.playing || !evidencePlayer.frames.length) return;
+  evidencePlayer.idx = (evidencePlayer.idx + 1) % evidencePlayer.frames.length;
+  playEvidenceFrame();
+}
+function stopEvidencePlayback() {
+  if (evidencePlayer.timer) clearInterval(evidencePlayer.timer);
+  evidencePlayer.timer = null;
+}
+
+document.getElementById('evidence-playpause').addEventListener('click', (e) => {
+  evidencePlayer.playing = !evidencePlayer.playing;
+  e.target.textContent = evidencePlayer.playing ? '⏸ PAUSE' : '▶ PLAY';
+});
+document.getElementById('evidence-close').addEventListener('click', () => {
+  stopEvidencePlayback();
+  document.getElementById('evidence-modal').classList.add('hidden');
+  document.getElementById('evidence-modal').classList.remove('flex');
+});
+</script>
+
 <script>
 const seatState = {};   // seat_id -> {risk, yaw_z, motion_z, calibrated, progress}
 const riskHistory = {}; // seat_id -> [{t, risk}]
@@ -356,10 +435,15 @@ function addAlert(ev) {
       <span class="text-[10px] mono text-slate-500">${ev.timestamp.toFixed(1)}s · risk ${ev.risk_score.toFixed(2)}</span>
     </div>
     <p class="text-xs text-slate-300 leading-snug mb-2">${objBadge}${ev.explanation}</p>
-    <button class="btn-dismiss text-[10px] mono px-2 py-1 rounded-md border border-white/10 text-slate-400" data-seat="${ev.seat_id}">
-      DISMISS — FALSE POSITIVE
-    </button>`;
-  card.querySelector('button').addEventListener('click', (e) => dismiss(ev.seat_id, e.target));
+    <div class="flex gap-2">
+      <button class="btn-dismiss text-[10px] mono px-2 py-1 rounded-md border border-white/10 text-slate-400" data-action="dismiss">
+        DISMISS — FALSE POSITIVE
+      </button>
+      ${ev.evidence_url ? `<button class="btn-dismiss text-[10px] mono px-2 py-1 rounded-md border border-cyan-500/30 text-cyan-300" data-action="evidence">▶ VIEW EVIDENCE</button>` : ''}
+    </div>`;
+  card.querySelector('[data-action="dismiss"]').addEventListener('click', (e) => dismiss(ev.seat_id, e.target));
+  const evBtn = card.querySelector('[data-action="evidence"]');
+  if (evBtn) evBtn.addEventListener('click', () => openEvidence(ev.evidence_url));
   feed.prepend(card);
   while (feed.children.length > 40) feed.removeChild(feed.lastChild);
 }
@@ -424,7 +508,9 @@ async function loadEventLog() {
         <td class="px-4 py-2 font-semibold" style="color:${seatColor(ev.seat_id)}">${ev.seat_id.toUpperCase()}</td>
         <td class="px-4 py-2">${typeBadge[ev.event_type] || ev.event_type}</td>
         <td class="px-4 py-2 mono text-slate-400">${ev.risk_score != null ? ev.risk_score.toFixed(2) : '—'}</td>
-        <td class="px-4 py-2 text-slate-300">${ev.explanation || '—'}</td>
+        <td class="px-4 py-2 text-slate-300">${ev.explanation || '—'}
+          ${ev.evidence_url ? `<button onclick="openEvidence('${ev.evidence_url}')" class="ml-2 text-[10px] mono text-cyan-400 hover:text-cyan-300">▶ evidence</button>` : ''}
+        </td>
       </tr>`).join('');
   } catch (e) {
     body.innerHTML = '<tr><td colspan="5" class="px-4 py-6 text-center text-red-400 mono">failed to load</td></tr>';

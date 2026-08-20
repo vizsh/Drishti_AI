@@ -23,6 +23,7 @@ import cv2
 from behaviour.gestures import GestureDetector, explain_gesture
 from calibration.baseline import BaselineCalibrator, TemporalSample, compute_motion_magnitude
 from calibration.homography import SeatCalibration
+from backend.evidence import EVIDENCE_DIR, RollingFrameBuffer, estimate_head_bbox, save_evidence_clip
 from ingestion.video_source import VideoSource
 from perception.object_detector import ObjectDetector
 from perception.pose import LEFT_SHOULDER, RIGHT_SHOULDER, PoseEstimator
@@ -82,6 +83,7 @@ class PipelineWorker(threading.Thread):
         self.risk_engine = RiskEngine()
         self.gesture_detector = GestureDetector(self.seat_cal)
         self.pose_estimator = PoseEstimator(device=device)
+        self.frame_buffer = RollingFrameBuffer(max_seconds=35.0)
 
         # v1 fine-tune only, per docs/architecture.md §4 — known to overfit on
         # background objects (found via Stage 4 validation), so its output is
@@ -123,6 +125,11 @@ class PipelineWorker(threading.Thread):
                 sim_time = time.time() - self._start_wall_time  # monotonic clock for calibration/risk logic
                 self._frame_counter += 1
                 poses = self.pose_estimator.estimate(frame.image, timestamp=sim_time)
+                # Every visible person's head, not just the alerting seat's —
+                # genuine privacy compliance for the evidence clip requires
+                # blurring everyone in frame.
+                head_bboxes = [estimate_head_bbox(p) for p in poses]
+                self.frame_buffer.add(sim_time, frame.image, [b for b in head_bboxes if b is not None])
 
                 # Object detection (docs/architecture.md §4) runs on its own,
                 # slower cadence — a separate model pass, not free.
@@ -221,6 +228,7 @@ class PipelineWorker(threading.Thread):
                         }
                     )
                     if assessment.explanation:
+                        evidence_url = self._capture_evidence(seat_id, assessment.triggering_event)
                         self.event_queue.put(
                             {
                                 "type": "alert",
@@ -229,6 +237,7 @@ class PipelineWorker(threading.Thread):
                                 "risk_score": round(assessment.risk_score, 3),
                                 "explanation": assessment.explanation,
                                 "object_label": object_label,
+                                "evidence_url": evidence_url,
                             }
                         )
 
@@ -273,3 +282,21 @@ class PipelineWorker(threading.Thread):
             return
         b64 = base64.b64encode(buf).decode("ascii")
         self.event_queue.put({"type": "frame", "timestamp": sim_time, "image": b64})
+
+    def _capture_evidence(self, seat_id: str, event) -> Optional[str]:
+        """docs/architecture.md §9/§11: face-blurred evidence clip for a
+        confirmed alert — the only raw-video artifact allowed to leave the
+        edge boundary. Encoding runs on its own thread so it can't stall
+        the live pipeline; the URL is returned immediately (deterministic
+        filename) so the alert card can offer it right away."""
+        if event is None:
+            return None
+        clip_frames = self.frame_buffer.extract(event.start_time, event.end_time)
+        if not clip_frames:
+            return None
+        clip_id = f"{seat_id}_{int(event.start_time * 1000)}"
+        clip_dir = EVIDENCE_DIR / clip_id
+        threading.Thread(
+            target=save_evidence_clip, args=(clip_frames, clip_dir, self.target_fps), daemon=True
+        ).start()
+        return f"/evidence/{clip_id}/manifest.json"

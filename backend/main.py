@@ -125,3 +125,7 @@ async def index() -> FileResponse:
 
 
 app.mount("/dashboard", StaticFiles(directory=Path(__file__).parent.parent / "dashboard"), name="dashboard")
+
+_evidence_dir = Path(__file__).parent.parent / "data" / "evidence"
+_evidence_dir.mkdir(parents=True, exist_ok=True)
+app.mount("/evidence", StaticFiles(directory=_evidence_dir), name="evidence")

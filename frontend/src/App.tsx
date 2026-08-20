@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { BrowserRouter, Routes, Route, Navigate, useNavigate } from 'react-router-dom'
 import { AuthProvider } from './state/AuthContext'
 import { LiveProvider } from './state/LiveContext'
 import { RequireAuth } from './components/RequireAuth'
@@ -13,6 +13,12 @@ import { AnalyticsPage } from './pages/AnalyticsPage'
 import { EvidenceVaultPage } from './pages/EvidenceVaultPage'
 import { SettingsPage } from './pages/SettingsPage'
 import { TrustCompliancePage } from './pages/TrustCompliancePage'
+import { DemoModePage } from './pages/DemoModePage'
+
+function DemoModeRoute() {
+  const navigate = useNavigate()
+  return <DemoModePage onExit={() => navigate('/settings')} />
+}
 
 export default function App() {
   return (
@@ -21,6 +27,14 @@ export default function App() {
         <LiveProvider>
           <Routes>
             <Route path="/login" element={<LoginPage />} />
+            <Route
+              path="/demo"
+              element={
+                <RequireAuth>
+                  <DemoModeRoute />
+                </RequireAuth>
+              }
+            />
             <Route
               element={
                 <RequireAuth>

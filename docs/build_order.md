@@ -89,9 +89,23 @@ available in this dev environment); DATABASE_URL swaps to a Postgres DSN
 for the production target with no schema/query changes. Verified a full
 page reload preserves the alert count and complete event history.
 
-Next: retrain the Stage 4 object detector once the 405 uploaded frames are
-labeled on Roboflow, then Jetson deployment packaging. Known open gaps vs.
-the PS's risk table (tracked honestly, not hidden): occlusion handling
-(multi-camera fusion, single camera only today), poor-lighting robustness
-(CLAHE preprocessing, not implemented), camera blind-spot coverage
-validator, and evidence-clip storage with face-blurring + audit logging.
+Face-blurred evidence clip capture (`backend/evidence.py`) done — closes
+the privacy row of the PS's risk table ("only face-blurred evidence clips
+may leave the edge boundary"). Head bboxes derived from pose keypoints
+(reusing Stage 5, not a new face-detection dependency) after two dead ends:
+cv2.CascadeClassifier doesn't exist in this OpenCV 5.0 build, and no H.264
+encoder is available so cv2.VideoWriter mp4 output doesn't play in Chrome —
+clips are a JPEG sequence + manifest instead, played back client-side.
+Verified: alert fired, evidence button appeared, clip played with every
+face blurred.
+
+387/405 candidate frames uploaded to Roboflow
+(idibag/kinesis-ai-contraband) for labeling — 18 failed on a transient DNS
+blip, retryable via tools/upload_to_roboflow.py.
+
+Next: retrain the Stage 4 object detector once labeling is done, then
+Jetson deployment packaging. Known open gaps vs. the PS's risk table
+(tracked honestly, not hidden): occlusion handling (multi-camera fusion,
+single camera only today), poor-lighting robustness (CLAHE preprocessing,
+not implemented), camera blind-spot coverage validator, and evidence-clip
+access audit logging (who viewed which clip, when).

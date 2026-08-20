@@ -152,7 +152,8 @@
       <div class="glass rounded-2xl p-4 text-xs mono text-slate-400 leading-relaxed">
         <div class="flex justify-between mb-1"><span>Object detector</span><span id="det-mode" class="text-slate-300">—</span></div>
         <div class="flex justify-between mb-1"><span>Perception</span><span class="text-slate-300">YOLO11-pose + BoT-SORT</span></div>
-        <div class="flex justify-between"><span>Identity</span><span class="text-slate-300">seat-anchored (homography)</span></div>
+        <div class="flex justify-between mb-1"><span>Identity</span><span class="text-slate-300">seat-anchored (homography)</span></div>
+        <div class="flex justify-between"><span>Lighting</span><span id="lighting-mode" class="text-slate-300">normal</span></div>
       </div>
     </div>
 
@@ -660,6 +661,14 @@ function connect() {
         detectorFinetuned = ev.object_detector_finetuned;
         document.getElementById('det-mode').textContent = detectorFinetuned
           ? 'fine-tuned v1 (unverified)' : 'stock COCO (baseline)';
+      }
+      const lightingEl = document.getElementById('lighting-mode');
+      if (ev.lighting_enhanced) {
+        lightingEl.textContent = 'CLAHE active — low light detected';
+        lightingEl.className = 'text-amber-300';
+      } else {
+        lightingEl.textContent = 'normal';
+        lightingEl.className = 'text-slate-300';
       }
     }
   };

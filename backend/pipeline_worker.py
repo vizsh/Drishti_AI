@@ -25,6 +25,7 @@ from calibration.baseline import BaselineCalibrator, TemporalSample, compute_mot
 from calibration.homography import SeatCalibration
 from backend.evidence import EVIDENCE_DIR, RollingFrameBuffer, estimate_head_bbox, save_evidence_clip
 from ingestion.video_source import VideoSource
+from perception.lighting import enhance_if_dark
 from perception.object_detector import ObjectDetector
 from perception.pose import LEFT_SHOULDER, RIGHT_SHOULDER, PoseEstimator
 from risk_engine.scorer import RiskEngine
@@ -124,7 +125,15 @@ class PipelineWorker(threading.Thread):
                     break
                 sim_time = time.time() - self._start_wall_time  # monotonic clock for calibration/risk logic
                 self._frame_counter += 1
-                poses = self.pose_estimator.estimate(frame.image, timestamp=sim_time)
+
+                # Lighting robustness (docs/architecture.md §8, PS risk row
+                # "Poor Lighting Conditions"): enhance only the copy fed to
+                # the models, not what's stored/displayed — evidence clips
+                # and the live feed should show what the camera actually
+                # recorded, not a brightened misrepresentation of it.
+                detect_input, was_enhanced = enhance_if_dark(frame.image)
+
+                poses = self.pose_estimator.estimate(detect_input, timestamp=sim_time)
                 # Every visible person's head, not just the alerting seat's —
                 # genuine privacy compliance for the evidence clip requires
                 # blurring everyone in frame.
@@ -135,7 +144,7 @@ class PipelineWorker(threading.Thread):
                 # slower cadence — a separate model pass, not free.
                 object_detections = []
                 if self._frame_counter % self.object_detect_every_n_frames == 0:
-                    object_detections = self.object_detector.detect(frame.image)
+                    object_detections = self.object_detector.detect(detect_input)
 
                 vis = frame.image if self.stream_every_n_frames and self._frame_counter % self.stream_every_n_frames == 0 else None
 
@@ -260,6 +269,7 @@ class PipelineWorker(threading.Thread):
                             "timestamp": sim_time,
                             "wall_time": now,
                             "object_detector_finetuned": self.object_detector_is_finetuned,
+                            "lighting_enhanced": was_enhanced,
                         }
                     )
         finally:

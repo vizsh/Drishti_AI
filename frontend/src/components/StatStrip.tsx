@@ -26,7 +26,10 @@ export function StatStrip({ seatsMonitored, calibrated, alerts, avgRisk }: Props
     { label: 'avg risk', value: avgRisk, decimals: 2 },
   ]
   return (
-    <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
+    // lg not md: at exactly tablet width (768px) md:grid-cols-4 was cramming
+    // 4 tiles into ~115px each — real, measured (Part 6 tablet check,
+    // 2026-08-21). Stays 2-column through tablet, 4-column only at desktop.
+    <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
       {items.map((it, i) => (
         <motion.div
           key={it.label}

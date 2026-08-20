@@ -128,6 +128,7 @@ export function useLiveSocket() {
         }
         case 'feedback':
         case 'dispatch':
+        case 'acknowledge':
           setFeedback((prev) => [ev.message ?? '', ...prev].slice(0, 10))
           break
         case 'frame':
@@ -171,6 +172,14 @@ export function useLiveSocket() {
     })
   }, [])
 
+  const acknowledgeAlert = useCallback(async (seatId: string, invigilator: string) => {
+    await fetch(`/api/alerts/${seatId}/acknowledge`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ invigilator }),
+    })
+  }, [])
+
   return {
     seats,
     riskHistory,
@@ -183,5 +192,6 @@ export function useLiveSocket() {
     feedback,
     dismissAlert,
     dispatchInvigilator,
+    acknowledgeAlert,
   }
 }

@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { AnimatePresence, motion } from 'framer-motion'
-import { PlayCircle, X, ChevronDown, UserPlus, Check, ShieldAlert, MinusCircle, ShieldCheck } from 'lucide-react'
+import { PlayCircle, X, ChevronDown, UserPlus, Check, ShieldAlert, MinusCircle, ShieldCheck, Eye } from 'lucide-react'
 import type { AlertItem } from '../types'
 import { seatColor } from '../lib/colors'
 import { Badge } from './Badge'
@@ -17,14 +17,16 @@ interface Props {
   seatIds: string[]
   onDismiss: (seatId: string, resolution?: Resolution, invigilator?: string) => Promise<void>
   onDispatch?: (seatId: string, invigilator: string) => Promise<void>
+  onAcknowledge?: (seatId: string, invigilator: string) => Promise<void>
   onViewEvidence: (url: string) => void
   limit?: number
   showViewAllLink?: boolean
 }
 
-export function AlertFeed({ alerts, feedback, seatIds, onDismiss, onDispatch, onViewEvidence, limit, showViewAllLink }: Props) {
+export function AlertFeed({ alerts, feedback, seatIds, onDismiss, onDispatch, onAcknowledge, onViewEvidence, limit, showViewAllLink }: Props) {
   const [resolved, setResolved] = useState<Map<string, Resolution>>(new Map())
   const [dispatched, setDispatched] = useState<Map<string, string>>(new Map())
+  const [acknowledged, setAcknowledged] = useState<Map<string, string>>(new Map())
   const visible = limit ? alerts.slice(0, limit) : alerts
 
   const handleResolve = async (item: AlertItem, resolution: Resolution, invigilator?: string) => {
@@ -35,6 +37,11 @@ export function AlertFeed({ alerts, feedback, seatIds, onDismiss, onDispatch, on
   const handleDispatch = async (item: AlertItem, invigilator: string) => {
     setDispatched((prev) => new Map(prev).set(item.id, invigilator))
     if (onDispatch) await onDispatch(item.seatId, invigilator)
+  }
+
+  const handleAcknowledge = async (item: AlertItem, invigilator: string) => {
+    setAcknowledged((prev) => new Map(prev).set(item.id, invigilator))
+    if (onAcknowledge) await onAcknowledge(item.seatId, invigilator)
   }
 
   return (
@@ -68,8 +75,10 @@ export function AlertFeed({ alerts, feedback, seatIds, onDismiss, onDispatch, on
               seatIds={seatIds}
               resolution={resolved.get(item.id) ?? null}
               dispatchedTo={dispatched.get(item.id) ?? null}
+              acknowledgedBy={acknowledged.get(item.id) ?? null}
               onResolve={handleResolve}
               onDispatch={handleDispatch}
+              onAcknowledge={handleAcknowledge}
               onViewEvidence={onViewEvidence}
             />
           ))}
@@ -84,16 +93,20 @@ function AlertCard({
   seatIds,
   resolution,
   dispatchedTo,
+  acknowledgedBy,
   onResolve,
   onDispatch,
+  onAcknowledge,
   onViewEvidence,
 }: {
   item: AlertItem
   seatIds: string[]
   resolution: Resolution | null
   dispatchedTo: string | null
+  acknowledgedBy: string | null
   onResolve: (item: AlertItem, resolution: Resolution, invigilator?: string) => void
   onDispatch: (item: AlertItem, invigilator: string) => void
+  onAcknowledge: (item: AlertItem, invigilator: string) => void
   onViewEvidence: (url: string) => void
 }) {
   const { user } = useAuth()
@@ -180,10 +193,26 @@ function AlertCard({
                 <UserPlus size={11} /> dispatch invigilator
               </button>
             )}
+            {/* Acknowledge: a lightweight "seen, noted" for a minor item —
+                distinct from Dispatch, doesn't require a resolution pick,
+                and the alert stays open in case it later needs one. */}
+            {!acknowledgedBy && !resolution && (
+              <button
+                onClick={() => onAcknowledge(item, user?.name ?? 'unknown')}
+                className="flex items-center gap-1 text-[10px] mono px-2 py-1 rounded-md border border-white/12 text-white/50 hover:border-white/30"
+              >
+                <Eye size={11} /> acknowledge
+              </button>
+            )}
           </div>
 
           {dispatchedTo && !resolution && (
             <p className="text-[10px] mono text-white/40">↳ dispatched to {dispatchedTo}</p>
+          )}
+          {acknowledgedBy && !resolution && (
+            <p className="flex items-center gap-1 text-[10px] mono text-white/40">
+              <Eye size={11} /> acknowledged by {acknowledgedBy}
+            </p>
           )}
 
           {!resolution && (

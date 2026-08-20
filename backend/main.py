@@ -161,6 +161,18 @@ async def dismiss_alert(seat_id: str, body: dict | None = None) -> dict:
     return {"status": "ok", "seat_id": seat_id, "resolution": resolution}
 
 
+@app.post("/api/alerts/{seat_id}/acknowledge")
+async def acknowledge_alert(seat_id: str, body: dict) -> dict:
+    """Part 6: lightweight "seen, noted" action distinct from dispatch/
+    resolve - for a minor item that doesn't need the full workflow. Logged
+    for the audit trail; doesn't touch calibration."""
+    invigilator = body.get("invigilator", "unknown")
+    w = _worker_for_seat(seat_id)
+    if w is not None:
+        w.acknowledge_alert(seat_id, invigilator)
+    return {"status": "ok", "seat_id": seat_id, "invigilator": invigilator}
+
+
 @app.post("/api/alerts/{seat_id}/dispatch")
 async def dispatch_invigilator(seat_id: str, body: dict) -> dict:
     """Phase 4: "Dispatch Invigilator" action in the investigation view —

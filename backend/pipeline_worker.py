@@ -211,6 +211,23 @@ class PipelineWorker(threading.Thread):
             }
         )
 
+    def acknowledge_alert(self, seat_id: str, invigilator: str) -> None:
+        """Part 6 (invigilator ergonomics, 2026-08-21): a lightweight "seen,
+        noted" action distinct from dispatch/resolve — for a minor item that
+        doesn't warrant a full dispatch-and-resolution cycle. Deliberately
+        does NOT touch calibration (unlike a false_alarm resolution) and
+        doesn't require a resolution taxonomy pick — it's just an audited
+        "an invigilator looked at this" marker, and the alert stays open for
+        a later dispatch/resolve if it turns out to need one."""
+        self.event_queue.put(
+            {
+                "type": "acknowledge",
+                "seat_id": seat_id,
+                "message": f"{invigilator} acknowledged alert at {seat_id}",
+                "invigilator": invigilator,
+            }
+        )
+
     def dispatch_invigilator(self, seat_id: str, invigilator: str) -> None:
         """Phase 4: logs a dispatch action (who, when) as its own audited
         event — separate from resolution since a dispatch can precede its

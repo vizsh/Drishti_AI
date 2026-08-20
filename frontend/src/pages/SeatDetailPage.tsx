@@ -19,7 +19,7 @@ interface EventRow {
 
 export function SeatDetailPage() {
   const { seatId } = useParams<{ seatId: string }>()
-  const { seats, riskHistory, alerts, dismissAlert, dispatchInvigilator } = useLive()
+  const { seats, riskHistory, alerts, dismissAlert, dispatchInvigilator, acknowledgeAlert } = useLive()
   const { isSeatInScope } = useHallScope()
   const [evidenceUrl, setEvidenceUrl] = useState<string | null>(null)
   const [history, setHistory] = useState<EventRow[]>([])
@@ -107,6 +107,7 @@ export function SeatDetailPage() {
               seatIds={[seatId]}
               onDismiss={dismissAlert}
               onDispatch={dispatchInvigilator}
+              onAcknowledge={acknowledgeAlert}
               onViewEvidence={setEvidenceUrl}
             />
             <div>

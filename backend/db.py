@@ -36,7 +36,7 @@ SessionLocal = sessionmaker(bind=engine)
 # "calibration_warning" (Part 2.5) is the repeated-same-direction-gesture
 # signature, logged distinctly from "gesture_alert" so it's queryable/
 # auditable as its own signal.
-PERSISTED_TYPES = ("telemetry", "alert", "gesture_alert", "feedback", "dispatch", "calibration_warning")
+PERSISTED_TYPES = ("telemetry", "alert", "gesture_alert", "feedback", "dispatch", "calibration_warning", "acknowledge")
 
 
 class Base(DeclarativeBase):

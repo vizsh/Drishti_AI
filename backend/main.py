@@ -22,27 +22,56 @@ from calibration.coverage import CameraCoverageInput, validate_coverage
 app = FastAPI(title="KINESIS AI")
 
 event_queue: "queue.Queue" = queue.Queue()
-worker: PipelineWorker | None = None
+workers: list[PipelineWorker] = []
+seat_to_worker: dict[str, PipelineWorker] = {}
 connections: list[WebSocket] = []
 session_id: int | None = None
 deployment: DeploymentConfig | None = None
 
 
+def _worker_for_seat(seat_id: str) -> PipelineWorker | None:
+    return seat_to_worker.get(seat_id)
+
+
 @app.on_event("startup")
 async def startup() -> None:
-    global worker, session_id, deployment
+    global workers, seat_to_worker, session_id, deployment
     deployment = load_deployment_config()
     db.init_db()
     session_id = db.create_session(deployment.primary_camera.video_path)
-    worker = PipelineWorker(deployment, event_queue, device="cuda")
-    worker.start()
+
+    # One independent PipelineWorker per group of cameras that actually
+    # share seats (backend/deployment_config.py's worker_groups()) — a
+    # camera with zero seat overlap with anything else is structurally
+    # invisible to a single global worker's scoring loop (the Hall B bug:
+    # seat_7-10 never scored because they shared no seats with the Hall A
+    # primary). All workers share one event_queue/broadcast_loop. Only the
+    # group containing the deployment's original primary camera streams
+    # live JPEG frames — PS performance note: never decode more than one
+    # tile's frames for live-feed display at a time.
+    groups = deployment.worker_groups()
+    for i, (primary, secondaries) in enumerate(groups):
+        w = PipelineWorker(
+            primary,
+            secondaries,
+            event_queue,
+            settling_seconds=deployment.settling_seconds,
+            object_detect_confidence=deployment.object_detect_confidence,
+            device="cuda",
+            stream_frames=(i == 0),
+        )
+        workers.append(w)
+        for seat_id in w.seat_cal.seats:
+            seat_to_worker[seat_id] = w
+        w.start()
+
     asyncio.create_task(broadcast_loop())
 
 
 @app.on_event("shutdown")
 async def shutdown() -> None:
-    if worker is not None:
-        worker.stop()
+    for w in workers:
+        w.stop()
 
 
 async def broadcast_loop() -> None:
@@ -86,9 +115,7 @@ async def ws_live(websocket: WebSocket) -> None:
 
 @app.get("/api/seats")
 async def get_seats() -> dict:
-    if worker is None:
-        return {"seats": []}
-    return {"seats": sorted(worker.seat_cal.seats.keys())}
+    return {"seats": sorted(seat_to_worker.keys())}
 
 
 @app.get("/api/cameras")
@@ -105,6 +132,7 @@ async def get_cameras() -> dict:
         "cameras": [
             {
                 "camera_id": cam.camera_id,
+                "hall": cam.hall,
                 "video_path": cam.video_path,
                 "is_simulated": cam.is_simulated,
                 "is_primary": i == 0,
@@ -118,8 +146,9 @@ async def get_cameras() -> dict:
 
 @app.post("/api/alerts/{seat_id}/dismiss")
 async def dismiss_alert(seat_id: str) -> dict:
-    if worker is not None:
-        worker.dismiss_alert(seat_id)
+    w = _worker_for_seat(seat_id)
+    if w is not None:
+        w.dismiss_alert(seat_id)
     return {"status": "ok", "seat_id": seat_id}
 
 
@@ -140,10 +169,13 @@ async def get_events(
 
 
 @app.get("/api/analytics")
-async def get_analytics(all_sessions: bool = False) -> dict:
-    """PS #1 objective: "behavioral analytics ... for invigilator review"."""
+async def get_analytics(all_sessions: bool = False, seat_ids: str | None = None) -> dict:
+    """PS #1 objective: "behavioral analytics ... for invigilator review".
+    seat_ids: optional comma-separated hall-scoping filter so an
+    Invigilator's stat strip reflects only their assigned hall."""
     sid = None if all_sessions else session_id
-    return await asyncio.to_thread(db.analytics_summary, sid)
+    scoped = seat_ids.split(",") if seat_ids else None
+    return await asyncio.to_thread(db.analytics_summary, sid, scoped)
 
 
 @app.get("/api/coverage")
@@ -153,7 +185,7 @@ async def get_coverage() -> dict:
     when a student in a blind spot goes unmonitored. Checks every camera in
     config/deployment.json against expected_seats (the institution's
     seating chart in a real deployment)."""
-    if worker is None or deployment is None:
+    if deployment is None:
         return {"results": []}
     cameras = [
         CameraCoverageInput(cam.camera_id, cam.calibration, cam.image_width, cam.image_height)
@@ -177,9 +209,11 @@ async def get_heatmap() -> Response:
     frames PS #1's live pipeline already decodes, not a separate offline
     pass. Useful for PS #1 directly: an invigilator can see at a glance
     where activity concentrated in the room over the whole session."""
-    if worker is None:
+    if not workers:
         return Response(status_code=503, content=b"pipeline not ready yet")
-    jpeg_bytes = await asyncio.to_thread(worker.render_heatmap_jpeg)
+    # Primary hall's worker only — matches the single live-feed camera and
+    # keeps this a lightweight glance, not a merged-multi-hall heatmap.
+    jpeg_bytes = await asyncio.to_thread(workers[0].render_heatmap_jpeg)
     if jpeg_bytes is None:
         return Response(status_code=503, content=b"no frames processed yet")
     return Response(content=jpeg_bytes, media_type="image/jpeg")

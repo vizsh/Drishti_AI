@@ -23,7 +23,7 @@ import cv2
 from behaviour.gestures import GestureDetector, explain_gesture
 from calibration.baseline import BaselineCalibrator, TemporalSample, compute_motion_magnitude
 from calibration.multi_camera import SeatObservation, fuse_seat_observations
-from backend.deployment_config import CameraConfig, DeploymentConfig, load_deployment_config
+from backend.deployment_config import CameraConfig
 from backend.evidence import EVIDENCE_DIR, RollingFrameBuffer, estimate_head_bbox, save_evidence_clip
 from ingestion.video_source import VideoSource
 from perception.lighting import enhance_if_dark
@@ -115,30 +115,40 @@ class SecondaryCameraFeed(threading.Thread):
 class PipelineWorker(threading.Thread):
     def __init__(
         self,
-        deployment: DeploymentConfig,
+        primary: CameraConfig,
+        secondaries: list[CameraConfig],
         event_queue: "queue.Queue",
+        settling_seconds: float = 20.0,
+        object_detect_confidence: float = 0.35,
         device: Optional[str] = None,
         target_fps: float = 10.0,
         stream_every_n_frames: int = 2,
         object_detect_every_n_frames: int = 5,
+        stream_frames: bool = True,
     ):
         super().__init__(daemon=True)
-        primary = deployment.primary_camera
+        self.camera_id = primary.camera_id
         self.video_path = primary.video_path
         self.event_queue = event_queue
         self.device = device
         self.target_fps = target_fps
         self.stream_every_n_frames = stream_every_n_frames
         self.object_detect_every_n_frames = object_detect_every_n_frames
+        # Only one worker's frames are ever pushed over the WebSocket "frame"
+        # channel at a time (the currently-focused tile) — see
+        # backend/main.py's worker_groups() wiring and PS performance note:
+        # never decode+stream more than one live feed at once.
+        self.stream_frames = stream_frames
 
         # Occlusion fusion (docs/architecture.md §8, PS risk "Occlusion") —
-        # one SecondaryCameraFeed per additional camera in the deployment
-        # config. See config/deployment.json's cam_b_SIMULATED comment for
-        # why the demo config's second camera is simulated, not real hardware.
-        self.secondary_cameras = [SecondaryCameraFeed(cam, device, target_fps) for cam in deployment.secondary_cameras]
+        # one SecondaryCameraFeed per camera that shares >=1 seat with this
+        # group's primary (backend/deployment_config.py's worker_groups()).
+        # See config/deployment.json's cam_b_SIMULATED comment for why the
+        # demo config's second camera is simulated, not real hardware.
+        self.secondary_cameras = [SecondaryCameraFeed(cam, device, target_fps) for cam in secondaries]
 
         self.seat_cal = primary.calibration
-        self.calibrator = BaselineCalibrator(settling_window_seconds=deployment.settling_seconds)
+        self.calibrator = BaselineCalibrator(settling_window_seconds=settling_seconds)
         self.risk_engine = RiskEngine()
         self.gesture_detector = GestureDetector(self.seat_cal)
         self.pose_estimator = PoseEstimator(device=device)
@@ -151,7 +161,7 @@ class PipelineWorker(threading.Thread):
         # surfaced to the UI tagged "experimental", never fed silently as fact.
         weights = str(FINE_TUNED_WEIGHTS) if FINE_TUNED_WEIGHTS.exists() else "yolo11n.pt"
         self.object_detector = ObjectDetector(
-            weights=weights, confidence_threshold=deployment.object_detect_confidence, device=device
+            weights=weights, confidence_threshold=object_detect_confidence, device=device
         )
         self.object_detector_is_finetuned = FINE_TUNED_WEIGHTS.exists()
 
@@ -229,7 +239,11 @@ class PipelineWorker(threading.Thread):
                 if self._frame_counter % self.object_detect_every_n_frames == 0:
                     object_detections = self.object_detector.detect(detect_input)
 
-                vis = frame.image if self.stream_every_n_frames and self._frame_counter % self.stream_every_n_frames == 0 else None
+                vis = (
+                    frame.image
+                    if self.stream_frames and self.stream_every_n_frames and self._frame_counter % self.stream_every_n_frames == 0
+                    else None
+                )
 
                 seen_seats = set()
                 seat_risk_this_frame: dict[str, str] = {}

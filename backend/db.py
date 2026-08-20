@@ -172,10 +172,14 @@ def query_events(
         ]
 
 
-def analytics_summary(session_id: Optional[int] = None) -> dict:
+def analytics_summary(session_id: Optional[int] = None, seat_ids: Optional[list[str]] = None) -> dict:
+    """seat_ids: optional hall-scoping filter (Phase 1 — role-based scoping
+    must apply consistently, including the top-level stat strip, not just
+    the seat grid/camera views)."""
     with SessionLocal() as db:
         alert_count_stmt = select(func.count()).select_from(EventLog).where(EventLog.event_type.in_(["alert", "gesture_alert"]))
         avg_risk_stmt = select(func.avg(EventLog.risk_score)).where(EventLog.event_type == "telemetry")
+        feedback_count_stmt = select(func.count()).select_from(EventLog).where(EventLog.event_type == "feedback")
         per_seat_stmt = (
             select(EventLog.seat_id, func.count())
             .where(EventLog.event_type.in_(["alert", "gesture_alert"]))
@@ -184,10 +188,22 @@ def analytics_summary(session_id: Optional[int] = None) -> dict:
         if session_id is not None:
             alert_count_stmt = alert_count_stmt.where(EventLog.session_id == session_id)
             avg_risk_stmt = avg_risk_stmt.where(EventLog.session_id == session_id)
+            feedback_count_stmt = feedback_count_stmt.where(EventLog.session_id == session_id)
             per_seat_stmt = per_seat_stmt.where(EventLog.session_id == session_id)
+        if seat_ids:
+            alert_count_stmt = alert_count_stmt.where(EventLog.seat_id.in_(seat_ids))
+            avg_risk_stmt = avg_risk_stmt.where(EventLog.seat_id.in_(seat_ids))
+            feedback_count_stmt = feedback_count_stmt.where(EventLog.seat_id.in_(seat_ids))
+            per_seat_stmt = per_seat_stmt.where(EventLog.seat_id.in_(seat_ids))
 
         alert_count = db.execute(alert_count_stmt).scalar() or 0
         avg_risk = db.execute(avg_risk_stmt).scalar() or 0.0
+        feedback_count = db.execute(feedback_count_stmt).scalar() or 0
         per_seat = dict(db.execute(per_seat_stmt).all())
 
-        return {"total_alerts": int(alert_count), "avg_risk": round(float(avg_risk), 3), "alerts_per_seat": per_seat}
+        return {
+            "total_alerts": int(alert_count),
+            "avg_risk": round(float(avg_risk), 3),
+            "alerts_per_seat": per_seat,
+            "false_positives_dismissed": int(feedback_count),
+        }

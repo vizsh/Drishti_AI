@@ -5,6 +5,7 @@ import { RiskTrendChart } from '../components/RiskTrendChart'
 import { AlertFeed } from '../components/AlertFeed'
 import { EvidenceModal } from '../components/EvidenceModal'
 import { useLive } from '../state/LiveContext'
+import { useHallScope } from '../state/useHallScope'
 import { LEVEL_COLOR, riskLevel } from '../lib/colors'
 
 interface EventRow {
@@ -18,6 +19,7 @@ interface EventRow {
 export function SeatDetailPage() {
   const { seatId } = useParams<{ seatId: string }>()
   const { seats, riskHistory, alerts, dismissAlert } = useLive()
+  const { isSeatInScope } = useHallScope()
   const [evidenceUrl, setEvidenceUrl] = useState<string | null>(null)
   const [history, setHistory] = useState<EventRow[]>([])
 
@@ -29,6 +31,20 @@ export function SeatDetailPage() {
   }, [seatId])
 
   if (!seatId) return null
+
+  if (!isSeatInScope(seatId)) {
+    return (
+      <div>
+        <Link to="/overview" className="flex items-center gap-1.5 text-xs mono text-white/50 hover:text-white mb-4 w-fit">
+          <ArrowLeft size={13} /> back to overview
+        </Link>
+        <div className="text-sm mono text-white/30 py-16 text-center">
+          {seatId.toUpperCase()} is outside your assigned hall — access restricted.
+        </div>
+      </div>
+    )
+  }
+
   const seat = seats[seatId]
   const seatAlerts = alerts.filter((a) => a.seatId === seatId)
   const seatRiskHistory = riskHistory[seatId] ? { [seatId]: riskHistory[seatId] } : {}

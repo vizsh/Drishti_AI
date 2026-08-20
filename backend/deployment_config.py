@@ -28,6 +28,7 @@ class CameraConfig:
     image_height: int
     calibration: SeatCalibration
     is_simulated: bool = False
+    hall: str = "Hall A"
 
 
 @dataclass
@@ -45,6 +46,37 @@ class DeploymentConfig:
     def secondary_cameras(self) -> list[CameraConfig]:
         return self.cameras[1:]
 
+    def worker_groups(self) -> list[tuple[CameraConfig, list[CameraConfig]]]:
+        """Groups cameras into independent (primary, [secondaries]) pairs by
+        actual seat overlap, not by a flat "camera 0 is primary" assumption.
+
+        Found via a real bug: seats covered ONLY by a "secondary" camera that
+        shares no seats with any primary never got scored at all — a
+        SecondaryCameraFeed only ever feeds fusion for seats its paired
+        primary already calibrates/scores in its own main loop (backend/
+        pipeline_worker.py). A camera with zero seat overlap with anything
+        already grouped needs its own independent primary worker, or its
+        seats are structurally invisible to the system. This groups
+        first-by-arrival, chaining any camera that shares >=1 seat with an
+        existing group's primary into that group as a fusion secondary, and
+        starting a new group otherwise.
+        """
+        groups: list[tuple[CameraConfig, list[CameraConfig]]] = []
+        remaining = list(self.cameras)
+        while remaining:
+            primary = remaining.pop(0)
+            primary_seats = set(primary.calibration.seats.keys())
+            secondaries: list[CameraConfig] = []
+            still_remaining: list[CameraConfig] = []
+            for cam in remaining:
+                if set(cam.calibration.seats.keys()) & primary_seats:
+                    secondaries.append(cam)
+                else:
+                    still_remaining.append(cam)
+            groups.append((primary, secondaries))
+            remaining = still_remaining
+        return groups
+
 
 def _build_calibration(cam: dict) -> SeatCalibration:
     cal = SeatCalibration(
@@ -60,6 +92,7 @@ def _build_calibration(cam: dict) -> SeatCalibration:
 
 def load_deployment_config(path: Path = DEFAULT_CONFIG_PATH) -> DeploymentConfig:
     data = json.loads(path.read_text())
+    halls = data.get("halls", {})
     cameras = [
         CameraConfig(
             camera_id=cam["camera_id"],
@@ -68,6 +101,7 @@ def load_deployment_config(path: Path = DEFAULT_CONFIG_PATH) -> DeploymentConfig
             image_height=cam["image_height"],
             calibration=_build_calibration(cam),
             is_simulated=cam.get("is_simulated", False),
+            hall=halls.get(cam["camera_id"], "Hall A"),
         )
         for cam in data["cameras"]
     ]

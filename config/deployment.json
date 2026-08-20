@@ -1,8 +1,14 @@
 {
   "_comment": "Deployment configuration — externalizes what used to be hardcoded in backend/pipeline_worker.py and backend/main.py, closing PS #1 objective 12 (updated PDF): 'adaptable and configurable for deployment across multiple educational environments.' Deploying to a new room means editing this file, not the codebase. image_points/seats are pixel coordinates from calibration/calibrate_tool.py; plane_points are the corresponding real-world/desk-plane coordinates from the same calibration session.",
-  "expected_seats": ["seat_1", "seat_2", "seat_3", "seat_4", "seat_5", "seat_6"],
+  "expected_seats": ["seat_1", "seat_2", "seat_3", "seat_4", "seat_5", "seat_6", "seat_7", "seat_8", "seat_9", "seat_10"],
   "settling_seconds": 20.0,
   "object_detect_confidence": 0.35,
+  "halls": {
+    "cam04_illustrative": "Hall A",
+    "cam_b_SIMULATED": "Hall A",
+    "cam_c_SIMULATED": "Hall B",
+    "cam_d_SIMULATED": "Hall B"
+  },
   "cameras": [
     {
       "camera_id": "cam04_illustrative",
@@ -33,6 +39,36 @@
       "seats": {
         "seat_1": [280, 220],
         "seat_2": [360, 230]
+      }
+    },
+    {
+      "camera_id": "cam_c_SIMULATED",
+      "_comment": "SIMULATED — Hall B has no real second camera either; this reuses the same single video source this whole project has (data/test_videos/04) through yet another homography, purely to give the multi-hall navigation shell (Phase 1) and analyst wall (Phase 2) real multiple halls to scope and group by. Deliberately reuses the same proven image_points region as cam04_illustrative (known to have real tracked people in this footage) rather than an unverified guess elsewhere in frame, which produced zero tracked seats when tried. Not a second physical room.",
+      "video_path": "data/test_videos/04.CCTV Candidate Talking.mkv",
+      "image_width": 640,
+      "image_height": 480,
+      "image_points": [[200, 195], [560, 260], [560, 150], [245, 105]],
+      "plane_points": [[0, 0], [400, 0], [400, 40], [0, 40]],
+      "max_snap_distance": 60,
+      "is_simulated": true,
+      "seats": {
+        "seat_7": [290, 210],
+        "seat_8": [370, 220]
+      }
+    },
+    {
+      "camera_id": "cam_d_SIMULATED",
+      "_comment": "SIMULATED — see cam_c_SIMULATED, same reasoning.",
+      "video_path": "data/test_videos/04.CCTV Candidate Talking.mkv",
+      "image_width": 640,
+      "image_height": 480,
+      "image_points": [[200, 195], [560, 260], [560, 150], [245, 105]],
+      "plane_points": [[0, 0], [400, 0], [400, 40], [0, 40]],
+      "max_snap_distance": 60,
+      "is_simulated": true,
+      "seats": {
+        "seat_9": [470, 230],
+        "seat_10": [550, 240]
       }
     }
   ]

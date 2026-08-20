@@ -1,28 +1,45 @@
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { AuthProvider } from './state/AuthContext'
 import { LiveProvider } from './state/LiveContext'
+import { RequireAuth } from './components/RequireAuth'
 import { AppLayout } from './layouts/AppLayout'
+import { LoginPage } from './pages/LoginPage'
 import { OverviewPage } from './pages/OverviewPage'
-import { LivePage } from './pages/LivePage'
+import { CommandCenterPage } from './pages/CommandCenterPage'
 import { SeatDetailPage } from './pages/SeatDetailPage'
 import { AlertsPage } from './pages/AlertsPage'
 import { AnalyticsPage } from './pages/AnalyticsPage'
+import { EvidenceVaultPage } from './pages/EvidenceVaultPage'
+import { SettingsPage } from './pages/SettingsPage'
 
 export default function App() {
   return (
     <BrowserRouter>
-      <LiveProvider>
-        <Routes>
-          <Route element={<AppLayout />}>
-            <Route index element={<Navigate to="/overview" replace />} />
-            <Route path="/overview" element={<OverviewPage />} />
-            <Route path="/live" element={<LivePage />} />
-            <Route path="/seat/:seatId" element={<SeatDetailPage />} />
-            <Route path="/alerts" element={<AlertsPage />} />
-            <Route path="/analytics" element={<AnalyticsPage />} />
-            <Route path="*" element={<Navigate to="/overview" replace />} />
-          </Route>
-        </Routes>
-      </LiveProvider>
+      <AuthProvider>
+        <LiveProvider>
+          <Routes>
+            <Route path="/login" element={<LoginPage />} />
+            <Route
+              element={
+                <RequireAuth>
+                  <AppLayout />
+                </RequireAuth>
+              }
+            >
+              <Route index element={<Navigate to="/command-center" replace />} />
+              <Route path="/command-center" element={<CommandCenterPage />} />
+              <Route path="/live" element={<Navigate to="/command-center" replace />} />
+              <Route path="/overview" element={<OverviewPage />} />
+              <Route path="/seat/:seatId" element={<SeatDetailPage />} />
+              <Route path="/alerts" element={<AlertsPage />} />
+              <Route path="/evidence-vault" element={<EvidenceVaultPage />} />
+              <Route path="/analytics" element={<AnalyticsPage />} />
+              <Route path="/settings" element={<SettingsPage />} />
+              <Route path="*" element={<Navigate to="/command-center" replace />} />
+            </Route>
+          </Routes>
+        </LiveProvider>
+      </AuthProvider>
     </BrowserRouter>
   )
 }

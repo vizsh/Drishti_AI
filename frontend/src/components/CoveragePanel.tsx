@@ -1,6 +1,6 @@
 import { useEffect, useState, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { ShieldCheck, ShieldAlert, RefreshCw } from 'lucide-react'
+import { ShieldCheck, ShieldAlert, RefreshCw, ChevronDown, ChevronUp, Radar } from 'lucide-react'
 
 interface CoverageResult {
   seat_id: string
@@ -9,10 +9,25 @@ interface CoverageResult {
   reason: string | null
 }
 
+interface CalibrationQuality {
+  camera_id: string
+  hit_rate: number | null
+  sample_count: number
+  status: 'gathering' | 'good' | 'needs_attention'
+}
+
+const QUALITY_COPY: Record<CalibrationQuality['status'], { label: string; color: string }> = {
+  gathering: { label: 'gathering data…', color: '#8b8578' },
+  good: { label: 'calibration looks good', color: '#8dff9e' },
+  needs_attention: { label: 'calibration needs attention', color: '#ff5a36' },
+}
+
 export function CoveragePanel() {
   const [results, setResults] = useState<CoverageResult[]>([])
   const [loading, setLoading] = useState(false)
   const [loaded, setLoaded] = useState(false)
+  const [quality, setQuality] = useState<CalibrationQuality[]>([])
+  const [showTechnical, setShowTechnical] = useState<string | null>(null)
 
   const run = useCallback(async () => {
     setLoading(true)
@@ -27,6 +42,21 @@ export function CoveragePanel() {
   }, [])
 
   useEffect(() => { run() }, [run])
+
+  useEffect(() => {
+    async function poll() {
+      try {
+        const res = await fetch('/api/calibration-quality')
+        const data = await res.json()
+        setQuality(data.cameras ?? [])
+      } catch {
+        /* keep last known */
+      }
+    }
+    poll()
+    const id = setInterval(poll, 5000)
+    return () => clearInterval(id)
+  }, [])
 
   const gaps = results.filter((r) => !r.covered).length
 
@@ -70,11 +100,51 @@ export function CoveragePanel() {
         </AnimatePresence>
       </div>
       {loaded && (
-        <p className="text-xs mono" style={{ color: gaps === 0 ? '#8dff9e' : '#ff5a36' }}>
+        <p className="text-xs mono mb-4" style={{ color: gaps === 0 ? '#8dff9e' : '#ff5a36' }}>
           {gaps === 0
             ? `All ${results.length} seats covered — safe to start.`
             : `${gaps} of ${results.length} seats have NO camera coverage — resolve before starting the exam.`}
         </p>
+      )}
+
+      {quality.length > 0 && (
+        <div className="border-t border-white/8 pt-4">
+          <div className="flex items-center gap-2 mb-3">
+            <Radar size={13} className="text-white/40" />
+            <h3 className="text-xs font-bold uppercase tracking-wide text-white/70">Calibration quality — live</h3>
+          </div>
+          <div className="flex flex-col gap-2">
+            {quality.map((q) => {
+              const copy = QUALITY_COPY[q.status]
+              const expanded = showTechnical === q.camera_id
+              return (
+                <div key={q.camera_id} className="rounded-xl border px-3 py-2" style={{ borderColor: `${copy.color}30`, background: `${copy.color}0a` }}>
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex items-center gap-2">
+                      <span className="w-2 h-2 rounded-full shrink-0" style={{ background: copy.color }} />
+                      <span className="text-xs font-semibold">{q.camera_id}</span>
+                      <span className="text-xs mono" style={{ color: copy.color }}>{copy.label}</span>
+                    </div>
+                    {q.hit_rate != null && (
+                      <button
+                        onClick={() => setShowTechnical(expanded ? null : q.camera_id)}
+                        className="flex items-center gap-1 text-[10px] mono text-white/35 hover:text-white/60"
+                      >
+                        {expanded ? <ChevronUp size={11} /> : <ChevronDown size={11} />} technical detail
+                      </button>
+                    )}
+                  </div>
+                  {expanded && q.hit_rate != null && (
+                    <p className="text-[10px] mono text-white/45 mt-2">
+                      seat-anchor hit rate: {(q.hit_rate * 100).toFixed(0)}% over last {q.sample_count} detections
+                      (flags below 40%)
+                    </p>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        </div>
       )}
     </div>
   )

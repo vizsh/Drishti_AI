@@ -93,11 +93,16 @@ function AlertCard({
   const { user } = useAuth()
   const [expanded, setExpanded] = useState(false)
   const isGesture = item.kind === 'gesture'
-  // Gesture explanations are already short/human (behaviour/gestures.py) —
-  // pass through. Risk-engine explanations get the raw-internals stripped
-  // for the default line (Problem 1); full text only shows when expanded.
-  const shortLine = isGesture ? item.explanation : shortAlertSummary(item.explanation)
+  const isCalibrationWarning = item.kind === 'calibration_warning'
+  // Gesture/calibration-warning explanations are already short/human
+  // (behaviour/gestures.py) — pass through. Risk-engine explanations get
+  // the raw-internals stripped for the default line (Problem 1); full text
+  // only shows when expanded.
+  const shortLine = isGesture || isCalibrationWarning ? item.explanation : shortAlertSummary(item.explanation)
   const hasMoreDetail = shortLine !== item.explanation
+
+  const borderColor = isCalibrationWarning ? '#5ad1ff40' : item.kind === 'alert' ? '#ff5a3640' : '#c4a3ff40'
+  const bgColor = isCalibrationWarning ? '#5ad1ff0c' : item.kind === 'alert' ? '#ff5a360c' : '#c4a3ff0c'
 
   return (
     <motion.div
@@ -106,16 +111,15 @@ function AlertCard({
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0 }}
       className="rounded-xl p-3 border"
-      style={{
-        borderColor: item.kind === 'alert' ? '#ff5a3640' : '#c4a3ff40',
-        background: item.kind === 'alert' ? '#ff5a360c' : '#c4a3ff0c',
-      }}
+      style={{ borderColor, background: bgColor }}
     >
       <div className="flex items-center justify-between mb-1">
         <span className="text-xs font-bold" style={{ color: seatColor(item.seatId, seatIds) }}>
           {item.seatId.toUpperCase()}
         </span>
-        {isGesture ? (
+        {isCalibrationWarning ? (
+          <span className="text-[9px] mono px-1.5 py-0.5 rounded" style={{ background: '#5ad1ff22', color: '#5ad1ff' }}>CALIBRATION</span>
+        ) : isGesture ? (
           <span className="text-[9px] mono px-1.5 py-0.5 rounded" style={{ background: '#c4a3ff22', color: '#c4a3ff' }}>GESTURE</span>
         ) : (
           <span className="text-[10px] mono text-white/40">{item.timestamp.toFixed(1)}s</span>

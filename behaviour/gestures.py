@@ -30,7 +30,8 @@ problem.
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from collections import deque
+from dataclasses import dataclass, field
 from typing import Optional
 
 from calibration.homography import SeatCalibration
@@ -64,6 +65,16 @@ class GestureEvent:
     start_time: float
     end_time: float
     neighbor_seat: Optional[str]
+    # Part 2.5 (2026-08-21 audit follow-up): set when this event is the 4th+
+    # hand_reach_across for the same (seat_id -> neighbor_seat) direction
+    # within repeat_window_seconds. Found via the multi-video robustness
+    # test: a roughly-calibrated camera produced 12 same-direction
+    # hand_reach_across events for one seat pair over 79s of footage — a
+    # signature of overlapping seat zones (see the NOTE in
+    # GestureDetector.observe below), not 12 genuine incidents.
+    likely_calibration_issue: bool = False
+    repeat_count: int = 0
+    repeat_window_seconds: float = 0.0
 
     @property
     def duration(self) -> float:
@@ -98,10 +109,19 @@ class GestureDetector:
         seat_cal: SeatCalibration,
         min_duration_seconds: float = 1.0,
         min_wrist_confidence: float = 0.35,
+        repeat_window_seconds: float = 90.0,
+        repeat_threshold: int = 3,
     ):
         self.seat_cal = seat_cal
         self.min_wrist_confidence = min_wrist_confidence
         self._hand_detector = SustainedBooleanDetector(min_duration_seconds)
+        # Part 2.5: recent hand_reach_across timestamps per (seat_id,
+        # neighbor_seat) *direction* — repeat_threshold prior events within
+        # repeat_window_seconds flags the next one as a likely calibration
+        # issue rather than a fresh genuine incident.
+        self.repeat_window_seconds = repeat_window_seconds
+        self.repeat_threshold = repeat_threshold
+        self._recent_events: dict[tuple[str, str], deque[float]] = {}
 
     def observe(self, seat_id: str, pose: PoseResult, timestamp: float) -> list[GestureEvent]:
         events: list[GestureEvent] = []
@@ -132,8 +152,25 @@ class GestureDetector:
 
         start = self._hand_detector.observe(("hand", seat_id), timestamp, reaching)
         if start is not None:
+            key = (seat_id, neighbor)
+            history = self._recent_events.setdefault(key, deque())
+            cutoff = timestamp - self.repeat_window_seconds
+            while history and history[0] < cutoff:
+                history.popleft()
+            recent_count = len(history)
+            history.append(timestamp)
+
             events.append(
-                GestureEvent(seat_id=seat_id, gesture="hand_reach_across", start_time=start, end_time=timestamp, neighbor_seat=neighbor)
+                GestureEvent(
+                    seat_id=seat_id,
+                    gesture="hand_reach_across",
+                    start_time=start,
+                    end_time=timestamp,
+                    neighbor_seat=neighbor,
+                    likely_calibration_issue=recent_count >= self.repeat_threshold,
+                    repeat_count=recent_count + 1,
+                    repeat_window_seconds=self.repeat_window_seconds,
+                )
             )
         return events
 
@@ -142,3 +179,14 @@ def explain_gesture(event: GestureEvent) -> str:
     """Deterministic template explanation, matching risk_engine/explain.py's
     style (docs/architecture.md §10) — measured facts only, no generative text."""
     return f"Hand crossed into {event.neighbor_seat}'s desk space for {event.duration:.1f}s (from {event.seat_id})."
+
+
+def explain_calibration_warning(event: GestureEvent) -> str:
+    """Part 2.5: template explanation for the calibration-issue signal —
+    same measured-fact style, naming the count/window so it's clear this is
+    a pattern detection, not a single incident."""
+    return (
+        f"Possible calibration issue at {event.seat_id}: hand-crossing into {event.neighbor_seat}'s zone "
+        f"detected {event.repeat_count} times in the last {event.repeat_window_seconds:.0f}s — recommend "
+        f"recalibrating this camera rather than treating these as individual incidents."
+    )

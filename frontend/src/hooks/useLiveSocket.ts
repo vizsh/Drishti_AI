@@ -113,6 +113,19 @@ export function useLiveSocket() {
           flashSeat(ev.seat_id!)
           break
         }
+        case 'calibration_warning': {
+          setAlerts((prev) => [
+            {
+              id: `${ev.seat_id}-${ev.timestamp}-cw`,
+              kind: 'calibration_warning' as const,
+              seatId: ev.seat_id!,
+              timestamp: ev.timestamp ?? 0,
+              explanation: ev.explanation ?? '',
+            },
+            ...prev,
+          ].slice(0, 60))
+          break
+        }
         case 'feedback':
         case 'dispatch':
           setFeedback((prev) => [ev.message ?? '', ...prev].slice(0, 10))

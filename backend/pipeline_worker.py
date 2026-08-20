@@ -20,11 +20,12 @@ from typing import Optional
 
 import cv2
 
-from behaviour.gestures import GestureDetector, explain_gesture
+from behaviour.gestures import GestureDetector, explain_calibration_warning, explain_gesture
 from calibration.baseline import BaselineCalibrator, TemporalSample, compute_motion_magnitude
 from calibration.multi_camera import SeatObservation, fuse_seat_observations
 from backend.deployment_config import CameraConfig
 from backend.evidence import EVIDENCE_DIR, RollingFrameBuffer, estimate_head_bbox, save_evidence_clip
+from calibration.quality import SeatAnchorQualityTracker
 from ingestion.video_source import VideoSource
 from perception.lighting import enhance_if_dark
 from perception.motion_heatmap import MotionHeatmapAccumulator
@@ -151,6 +152,7 @@ class PipelineWorker(threading.Thread):
         self.calibrator = BaselineCalibrator(settling_window_seconds=settling_seconds)
         self.risk_engine = RiskEngine()
         self.gesture_detector = GestureDetector(self.seat_cal)
+        self.anchor_quality = SeatAnchorQualityTracker(camera_id=self.camera_id)
         self.pose_estimator = PoseEstimator(device=device)
         self.frame_buffer = RollingFrameBuffer(max_seconds=35.0)
         self.heatmap: Optional[MotionHeatmapAccumulator] = None  # lazily sized on first frame
@@ -221,6 +223,14 @@ class PipelineWorker(threading.Thread):
                 "invigilator": invigilator,
             }
         )
+
+    def calibration_quality(self) -> dict:
+        """Part 2.5: live seat-anchor hit-rate signal for this camera —
+        surfaced on the Pre-Exam Coverage panel alongside the static
+        geometric coverage check, since a bad calibration only shows up
+        once real detections are flowing through it."""
+        q = self.anchor_quality.snapshot()
+        return {"camera_id": q.camera_id, "hit_rate": q.hit_rate, "sample_count": q.sample_count, "status": q.status}
 
     def render_heatmap_jpeg(self) -> Optional[bytes]:
         """Current session motion heatmap as JPEG bytes, or None before the
@@ -315,20 +325,37 @@ class PipelineWorker(threading.Thread):
                     x1, y1, x2, y2 = p.xyxy
                     anchor = ((x1 + x2) / 2.0, y2)
                     seat_id, dist = self.seat_cal.nearest_seat(anchor)
+                    self.anchor_quality.record(hit=seat_id is not None)
                     if seat_id is None:
                         continue
                     seen_seats.add(seat_id)
 
                     for gesture_event in self.gesture_detector.observe(seat_id, p, sim_time):
-                        self.event_queue.put(
-                            {
-                                "type": "gesture_alert",
-                                "seat_id": seat_id,
-                                "timestamp": sim_time,
-                                "gesture": gesture_event.gesture,
-                                "explanation": explain_gesture(gesture_event),
-                            }
-                        )
+                        if gesture_event.likely_calibration_issue:
+                            # Part 2.5: repeated same-direction hand-reach
+                            # events are a calibration signature, not N
+                            # genuine incidents — surfaced as a distinct
+                            # event type instead of flooding the alert feed
+                            # with high-risk gesture alerts.
+                            self.event_queue.put(
+                                {
+                                    "type": "calibration_warning",
+                                    "seat_id": seat_id,
+                                    "timestamp": sim_time,
+                                    "gesture": gesture_event.gesture,
+                                    "explanation": explain_calibration_warning(gesture_event),
+                                }
+                            )
+                        else:
+                            self.event_queue.put(
+                                {
+                                    "type": "gesture_alert",
+                                    "seat_id": seat_id,
+                                    "timestamp": sim_time,
+                                    "gesture": gesture_event.gesture,
+                                    "explanation": explain_gesture(gesture_event),
+                                }
+                            )
 
                     keypoints = p.smoothed_keypoints or p.keypoints
                     shoulder_width = abs(keypoints[RIGHT_SHOULDER][0] - keypoints[LEFT_SHOULDER][0]) or 1.0

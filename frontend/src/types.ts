@@ -16,7 +16,7 @@ export interface RiskPoint {
 
 export interface AlertItem {
   id: string
-  kind: 'alert' | 'gesture'
+  kind: 'alert' | 'gesture' | 'calibration_warning'
   seatId: string
   timestamp: number
   riskScore?: number

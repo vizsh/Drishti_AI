@@ -216,6 +216,16 @@ async def get_session_report(seat_ids: str | None = None) -> Response:
     )
 
 
+@app.get("/api/calibration-quality")
+async def get_calibration_quality() -> dict:
+    """Part 2.5: live per-camera seat-anchor hit-rate, alongside the static
+    /api/coverage geometric check. "gathering" until enough samples exist to
+    judge, "needs_attention" below the low-confidence threshold, else
+    "good". Only covers primary cameras (one per worker_groups() group) —
+    secondary/fusion-only cameras don't run their own scoring loop."""
+    return {"cameras": [w.calibration_quality() for w in workers]}
+
+
 @app.get("/api/coverage")
 async def get_coverage() -> dict:
     """Pre-exam camera blind-spot check (docs/architecture.md §13,

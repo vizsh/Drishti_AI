@@ -33,7 +33,10 @@ SessionLocal = sessionmaker(bind=engine)
 # it's the only source for historical risk-trend analytics). "dispatch" is
 # Phase 4's audit trail for "who was sent to check on this seat, when" —
 # same log_events path as everything else, not a separate table.
-PERSISTED_TYPES = ("telemetry", "alert", "gesture_alert", "feedback", "dispatch")
+# "calibration_warning" (Part 2.5) is the repeated-same-direction-gesture
+# signature, logged distinctly from "gesture_alert" so it's queryable/
+# auditable as its own signal.
+PERSISTED_TYPES = ("telemetry", "alert", "gesture_alert", "feedback", "dispatch", "calibration_warning")
 
 
 class Base(DeclarativeBase):

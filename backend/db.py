@@ -45,6 +45,37 @@ class ExamSession(Base):
     started_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc))
 
 
+class EvidenceAccessLog(Base):
+    """PS risk table row "Privacy Concerns": evidence clips are the one
+    raw-video artifact allowed off the edge boundary, so every view of one
+    must be attributable — who looked at which clip, when. Logged
+    server-side regardless of what the viewer's UI shows."""
+
+    __tablename__ = "evidence_access_log"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    clip_id: Mapped[str] = mapped_column(String(200), index=True)
+    client_ip: Mapped[str] = mapped_column(String(64))
+    accessed_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+
+
+def log_evidence_access(clip_id: str, client_ip: str) -> None:
+    with SessionLocal() as db:
+        db.add(EvidenceAccessLog(clip_id=clip_id, client_ip=client_ip))
+        db.commit()
+
+
+def query_evidence_access(clip_id: Optional[str] = None, limit: int = 200) -> list[dict]:
+    with SessionLocal() as db:
+        stmt = select(EvidenceAccessLog).order_by(EvidenceAccessLog.id.desc()).limit(limit)
+        if clip_id:
+            stmt = stmt.where(EvidenceAccessLog.clip_id == clip_id)
+        rows = db.execute(stmt).scalars().all()
+        return [
+            {"id": r.id, "clip_id": r.clip_id, "client_ip": r.client_ip, "accessed_at": r.accessed_at.isoformat()}
+            for r in rows
+        ]
+
+
 class EventLog(Base):
     __tablename__ = "events"
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)

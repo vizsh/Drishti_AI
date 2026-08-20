@@ -10,7 +10,7 @@ import asyncio
 import queue
 from pathlib import Path
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -147,13 +147,37 @@ async def get_coverage() -> dict:
     }
 
 
+@app.get("/api/evidence-access-log")
+async def get_evidence_access_log(clip_id: str | None = None, limit: int = 200) -> dict:
+    """PS risk table row "Privacy Concerns" — who viewed which evidence
+    clip, when. Read side of the audit trail written by
+    get_evidence_manifest below."""
+    return {"log": await asyncio.to_thread(db.query_evidence_access, clip_id, limit)}
+
+
 @app.get("/")
 async def index() -> FileResponse:
     return FileResponse(Path(__file__).parent.parent / "dashboard" / "index.html")
 
 
-app.mount("/dashboard", StaticFiles(directory=Path(__file__).parent.parent / "dashboard"), name="dashboard")
-
 _evidence_dir = Path(__file__).parent.parent / "data" / "evidence"
 _evidence_dir.mkdir(parents=True, exist_ok=True)
+
+
+@app.get("/evidence/{clip_id}/manifest.json")
+async def get_evidence_manifest(clip_id: str, request: Request) -> FileResponse:
+    """Explicit route ahead of the /evidence static mount below, so every
+    clip *open* (fetching its manifest is the dashboard's entry point for
+    viewing one) is logged with the viewer's address — audit logging the
+    PS's own "Privacy Concerns" risk row asks for, not left as a silent
+    static-file fetch. Individual frame_NNN.jpg images still fall through
+    to the plain static mount, which is fine — the manifest fetch is a
+    reliable, low-noise proxy for "this clip was opened."""
+    client_ip = request.client.host if request.client else "unknown"
+    await asyncio.to_thread(db.log_evidence_access, clip_id, client_ip)
+    manifest_path = _evidence_dir / clip_id / "manifest.json"
+    return FileResponse(manifest_path, media_type="application/json")
+
+
+app.mount("/dashboard", StaticFiles(directory=Path(__file__).parent.parent / "dashboard"), name="dashboard")
 app.mount("/evidence", StaticFiles(directory=_evidence_dir), name="evidence")

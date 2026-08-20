@@ -87,22 +87,23 @@ def blur_faces(image: np.ndarray, head_bboxes: list[tuple[int, int, int, int]]) 
     return out
 
 
-FrameEntry = Tuple[float, np.ndarray, list]  # (timestamp, image, head_bboxes)
+FrameEntry = Tuple[float, np.ndarray, list, dict]  # (timestamp, image, head_bboxes, seat_poses)
 
 
 class RollingFrameBuffer:
     """Keeps the last `max_seconds` of raw frames (+ every visible person's
-    head bbox that frame, for blurring) so a confirmed alert can
-    retroactively pull the clip that led to it — this is why it has to be
-    long enough to cover a sustained-deviation event's full duration
-    (observed up to ~25s in Stage 7 validation), not just a couple seconds."""
+    head bbox that frame, for blurring, + per-seat bbox/keypoints for the
+    annotated-evidence overlay) so a confirmed alert can retroactively pull
+    the clip that led to it — this is why it has to be long enough to cover
+    a sustained-deviation event's full duration (observed up to ~25s in
+    Stage 7 validation), not just a couple seconds."""
 
     def __init__(self, max_seconds: float = 35.0):
         self.max_seconds = max_seconds
         self._frames: Deque[FrameEntry] = deque()
 
-    def add(self, timestamp: float, image: np.ndarray, head_bboxes: list) -> None:
-        self._frames.append((timestamp, image.copy(), head_bboxes))
+    def add(self, timestamp: float, image: np.ndarray, head_bboxes: list, seat_poses: Optional[dict] = None) -> None:
+        self._frames.append((timestamp, image.copy(), head_bboxes, seat_poses or {}))
         cutoff = timestamp - self.max_seconds
         while self._frames and self._frames[0][0] < cutoff:
             self._frames.popleft()
@@ -112,18 +113,39 @@ class RollingFrameBuffer:
         return [entry for entry in self._frames if lo <= entry[0] <= hi]
 
 
-def save_evidence_clip(frames: list[FrameEntry], clip_dir: Path, fps: float = 10.0) -> Optional[Path]:
+def save_evidence_clip(
+    frames: list[FrameEntry], clip_dir: Path, fps: float = 10.0, seat_id: Optional[str] = None
+) -> Optional[Path]:
     """Writes face-blurred frame_NNN.jpg + manifest.json into clip_dir.
-    Returns the manifest path, or None if there were no frames to save."""
+    manifest["annotations"][i] carries the alerting seat's bbox/keypoints
+    for frame i (when available), so the frontend can draw a box/skeleton
+    directly on the evidence frame (Phase 3) instead of showing only the
+    text explanation next to a plain image. Deliberately omits every other
+    visible person's pose data — only the alerting seat's, consistent with
+    the rest of the system never exposing more than the flagged student's
+    own data. Returns the manifest path, or None if there were no frames to
+    save."""
     if not frames:
         return None
     clip_dir.mkdir(parents=True, exist_ok=True)
     frame_names = []
-    for i, (_, img, head_bboxes) in enumerate(frames):
+    annotations = []
+    for i, (_, img, head_bboxes, seat_poses) in enumerate(frames):
         name = f"frame_{i:03d}.jpg"
         cv2.imwrite(str(clip_dir / name), blur_faces(img, head_bboxes), [cv2.IMWRITE_JPEG_QUALITY, 80])
         frame_names.append(name)
+        annotations.append(seat_poses.get(seat_id) if seat_id else None)
 
     manifest_path = clip_dir / "manifest.json"
-    manifest_path.write_text(json.dumps({"fps": fps, "frame_count": len(frame_names), "frames": frame_names}))
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "fps": fps,
+                "frame_count": len(frame_names),
+                "frames": frame_names,
+                "seat_id": seat_id,
+                "annotations": annotations,
+            }
+        )
+    )
     return manifest_path

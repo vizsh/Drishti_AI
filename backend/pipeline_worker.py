@@ -231,7 +231,30 @@ class PipelineWorker(threading.Thread):
                 # genuine privacy compliance for the evidence clip requires
                 # blurring everyone in frame.
                 head_bboxes = [estimate_head_bbox(p) for p in poses]
-                self.frame_buffer.add(sim_time, frame.image, [b for b in head_bboxes if b is not None])
+
+                # Per-seat bbox/keypoints for THIS frame, keyed by seat_id —
+                # Phase 3's annotated-evidence overlay needs the alerting
+                # seat's box/skeleton at each frame of the clip, not just the
+                # text explanation. Computed here (cheap nearest_seat lookup,
+                # duplicated below in the scoring loop) so it can ride along
+                # with frame_buffer.add() before seat assignment happens for
+                # scoring purposes.
+                seat_poses: dict[str, dict] = {}
+                for p in poses:
+                    if p.track_id is None:
+                        continue
+                    x1, y1, x2, y2 = p.xyxy
+                    seat_id, _ = self.seat_cal.nearest_seat(((x1 + x2) / 2.0, y2))
+                    if seat_id is None:
+                        continue
+                    keypoints = p.smoothed_keypoints or p.keypoints
+                    seat_poses[seat_id] = {
+                        "xyxy": [round(v, 1) for v in p.xyxy],
+                        "keypoints": [[round(x, 1), round(y, 1)] for x, y in keypoints],
+                        "keypoint_confidence": [round(c, 2) for c in p.keypoint_confidence],
+                    }
+
+                self.frame_buffer.add(sim_time, frame.image, [b for b in head_bboxes if b is not None], seat_poses)
 
                 # Object detection (docs/architecture.md §4) runs on its own,
                 # slower cadence — a separate model pass, not free.
@@ -426,6 +449,6 @@ class PipelineWorker(threading.Thread):
         clip_id = f"{seat_id}_{int(event.start_time * 1000)}"
         clip_dir = EVIDENCE_DIR / clip_id
         threading.Thread(
-            target=save_evidence_clip, args=(clip_frames, clip_dir, self.target_fps), daemon=True
+            target=save_evidence_clip, args=(clip_frames, clip_dir, self.target_fps, seat_id), daemon=True
         ).start()
         return f"/evidence/{clip_id}/manifest.json"

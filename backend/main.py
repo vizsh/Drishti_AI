@@ -15,16 +15,9 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from backend import db
+from backend.deployment_config import DeploymentConfig, load_deployment_config
 from backend.pipeline_worker import PipelineWorker
 from calibration.coverage import CameraCoverageInput, validate_coverage
-
-VIDEO_PATH = "data/test_videos/04.CCTV Candidate Talking.mkv"
-DEMO_FRAME_SIZE = (640, 480)  # data/test_videos/04's actual resolution
-
-# The institution's full seating chart, in a real deployment — deliberately
-# wider than the 4 seats actually calibrated in this demo, so the coverage
-# check has real blind spots to report rather than always passing.
-EXPECTED_SEAT_IDS = ["seat_1", "seat_2", "seat_3", "seat_4", "seat_5", "seat_6"]
 
 app = FastAPI(title="KINESIS AI")
 
@@ -32,14 +25,16 @@ event_queue: "queue.Queue" = queue.Queue()
 worker: PipelineWorker | None = None
 connections: list[WebSocket] = []
 session_id: int | None = None
+deployment: DeploymentConfig | None = None
 
 
 @app.on_event("startup")
 async def startup() -> None:
-    global worker, session_id
+    global worker, session_id, deployment
+    deployment = load_deployment_config()
     db.init_db()
-    session_id = db.create_session(VIDEO_PATH)
-    worker = PipelineWorker(VIDEO_PATH, event_queue, device="cuda", settling_seconds=20.0)
+    session_id = db.create_session(deployment.primary_camera.video_path)
+    worker = PipelineWorker(deployment, event_queue, device="cuda")
     worker.start()
     asyncio.create_task(broadcast_loop())
 
@@ -130,13 +125,16 @@ async def get_analytics(all_sessions: bool = False) -> dict:
 async def get_coverage() -> dict:
     """Pre-exam camera blind-spot check (docs/architecture.md §13,
     differentiator #10) — run before an exam starts, not discovered mid-exam
-    when a student in a blind spot goes unmonitored. EXPECTED_SEAT_IDS
-    stands in for a real institution's seating chart in this demo."""
-    if worker is None:
+    when a student in a blind spot goes unmonitored. Checks every camera in
+    config/deployment.json against expected_seats (the institution's
+    seating chart in a real deployment)."""
+    if worker is None or deployment is None:
         return {"results": []}
-    width, height = DEMO_FRAME_SIZE
-    camera = CameraCoverageInput(worker.seat_cal.camera_id, worker.seat_cal, width, height)
-    results = validate_coverage(EXPECTED_SEAT_IDS, [camera])
+    cameras = [
+        CameraCoverageInput(cam.camera_id, cam.calibration, cam.image_width, cam.image_height)
+        for cam in deployment.cameras
+    ]
+    results = validate_coverage(deployment.expected_seats, cameras)
     return {
         "results": [
             {"seat_id": r.seat_id, "covered": r.covered, "covering_cameras": r.covering_cameras, "reason": r.reason}

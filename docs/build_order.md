@@ -123,9 +123,27 @@ below 0.4 (the architecture doc's originally-planned but unbuilt
 varied realistically per seat (55-88%) and rendered correctly on a real
 alert ("conf 88%").
 
-Next: retrain the Stage 4 object detector once labeling is done, then
-Jetson deployment packaging. Known open gaps vs. the PS's risk table
-(tracked honestly, not hidden): occlusion handling (multi-camera fusion,
-single camera only today), poor-lighting robustness (CLAHE preprocessing,
-not implemented), and evidence-clip access audit logging (who viewed which
-clip, when).
+Full-codebase health check (all 18 modules import cleanly, all 14
+correctness tests across calibration/test_homography.py,
+test_coverage.py, test_multi_camera.py passing) found zero regressions
+before this round. Closed every remaining tracked gap except the two
+blocked on external data:
+
+- Lighting robustness (`perception/lighting.py`) — conditional CLAHE,
+  validated with a real before/after test (darkening a real frame dropped
+  detections from 5 to 2 people; CLAHE recovered 4 of 5).
+- Multi-camera occlusion fusion (`calibration/multi_camera.py`) —
+  confidence-weighted fusion, 5 correctness tests, wired live via a
+  SIMULATED second camera (this project has only one real camera's
+  footage; labeled as simulated everywhere, same pattern as the
+  illustrative seat calibration). Verified live: seats covered by both
+  cameras show a fusion badge, single-camera seats don't.
+- Evidence-clip access audit logging (`backend/db.py`
+  EvidenceAccessLog) — closes the Privacy Concerns risk row. Verified
+  live: opened a real clip, confirmed a real logged access entry.
+
+Remaining, both blocked on the user's Roboflow labeling pass (0/388
+images labeled as of this session): retrain the Stage 4 object detector,
+and the ST-GCN++ behaviour classifier (needs labeled gesture clips too).
+After that: Jetson deployment packaging (needs physical hardware to
+validate, lower priority than demo-readiness).

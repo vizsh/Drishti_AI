@@ -23,6 +23,7 @@ import cv2
 from behaviour.gestures import GestureDetector, explain_gesture
 from calibration.baseline import BaselineCalibrator, TemporalSample, compute_motion_magnitude
 from calibration.homography import SeatCalibration
+from calibration.multi_camera import SeatObservation, fuse_seat_observations
 from backend.evidence import EVIDENCE_DIR, RollingFrameBuffer, estimate_head_bbox, save_evidence_clip
 from ingestion.video_source import VideoSource
 from perception.lighting import enhance_if_dark
@@ -60,6 +61,100 @@ def build_illustrative_calibration() -> SeatCalibration:
     return cal
 
 
+def build_synthetic_second_camera_calibration() -> SeatCalibration:
+    """A SIMULATED second camera for demonstrating multi-camera occlusion
+    fusion (calibration/multi_camera.py, docs/architecture.md §8) live.
+
+    This project has only one real camera's footage — there is no second
+    physical camera. This calibration reuses the same video frames through
+    a different homography (different image_points, same real seats) purely
+    to exercise the fusion code path with real pose-confidence values, the
+    same way build_illustrative_calibration() above is a hand-picked demo
+    calibration rather than a measured one. It is NOT a second real view of
+    the room, and is labeled as such everywhere it surfaces (SeatObservation
+    .camera_id, the dashboard's system-info panel) — real multi-camera
+    deployment requires genuine second-camera hardware and
+    calibration/calibrate_tool.py run against its actual footage.
+    """
+    cal = SeatCalibration(
+        camera_id="cam_b_SIMULATED",
+        image_points=[(180, 210), (540, 270), (520, 160), (230, 120)],
+        plane_points=[(0, 0), (400, 0), (400, 40), (0, 40)],
+        max_snap_distance=60,
+    )
+    for seat_id, img_pt in {
+        "seat_1": (280, 220),
+        "seat_2": (360, 230),
+    }.items():
+        cal.seats[seat_id] = cal.project(img_pt)
+    return cal
+
+
+class SecondaryCameraFeed(threading.Thread):
+    """Runs a second, independent pose pipeline against a SIMULATED second
+    camera (see build_synthetic_second_camera_calibration) and publishes
+    SeatObservations for the primary PipelineWorker to fuse. Deliberately
+    minimal — no calibration/risk-engine duplication, just the raw
+    per-frame observations fusion actually needs."""
+
+    def __init__(self, video_path: str, device: Optional[str], target_fps: float = 10.0):
+        super().__init__(daemon=True)
+        self.seat_cal = build_synthetic_second_camera_calibration()
+        self.pose_estimator = PoseEstimator(device=device)
+        self.video_path = video_path
+        self.target_fps = target_fps
+        self._stop_event = threading.Event()
+        self._lock = threading.Lock()
+        self._latest: dict[str, tuple[float, SeatObservation]] = {}
+        self._prev_keypoints: dict[str, list[tuple[float, float]]] = {}
+
+    def stop(self) -> None:
+        self._stop_event.set()
+
+    def latest_observation(self, seat_id: str, now: float, max_age_s: float = 1.0) -> Optional[SeatObservation]:
+        with self._lock:
+            entry = self._latest.get(seat_id)
+        if entry is None:
+            return None
+        ts, obs = entry
+        return obs if (now - ts) <= max_age_s else None
+
+    def run(self) -> None:
+        while not self._stop_event.is_set():
+            video = VideoSource(self.video_path, target_fps=self.target_fps)
+            try:
+                for frame in video.frames():
+                    if self._stop_event.is_set():
+                        break
+                    sim_time = time.time()
+                    poses = self.pose_estimator.estimate(frame.image, timestamp=sim_time)
+                    for p in poses:
+                        if p.track_id is None:
+                            continue
+                        x1, y1, x2, y2 = p.xyxy
+                        seat_id, _ = self.seat_cal.nearest_seat(((x1 + x2) / 2.0, y2))
+                        if seat_id is None:
+                            continue
+                        keypoints = p.smoothed_keypoints or p.keypoints
+                        shoulder_width = abs(keypoints[RIGHT_SHOULDER][0] - keypoints[LEFT_SHOULDER][0]) or 1.0
+                        motion = 0.0
+                        if seat_id in self._prev_keypoints:
+                            motion = compute_motion_magnitude(
+                                self._prev_keypoints[seat_id], keypoints, p.keypoint_confidence, shoulder_width
+                            )
+                        self._prev_keypoints[seat_id] = keypoints
+                        obs = SeatObservation(
+                            camera_id=self.seat_cal.camera_id,
+                            torso_yaw=p.torso_yaw_proxy(),
+                            motion_magnitude=motion,
+                            pose_confidence=p.detection_confidence(),
+                        )
+                        with self._lock:
+                            self._latest[seat_id] = (sim_time, obs)
+            finally:
+                video.release()
+
+
 class PipelineWorker(threading.Thread):
     def __init__(
         self,
@@ -70,6 +165,7 @@ class PipelineWorker(threading.Thread):
         target_fps: float = 10.0,
         stream_every_n_frames: int = 2,
         object_detect_every_n_frames: int = 5,
+        enable_simulated_second_camera: bool = True,
     ):
         super().__init__(daemon=True)
         self.video_path = video_path
@@ -78,6 +174,11 @@ class PipelineWorker(threading.Thread):
         self.target_fps = target_fps
         self.stream_every_n_frames = stream_every_n_frames
         self.object_detect_every_n_frames = object_detect_every_n_frames
+
+        # Occlusion fusion (docs/architecture.md §8, PS risk "Occlusion") —
+        # see build_synthetic_second_camera_calibration()'s docstring for why
+        # this is a simulated second view, not real second-camera hardware.
+        self.secondary_camera = SecondaryCameraFeed(video_path, device, target_fps) if enable_simulated_second_camera else None
 
         self.seat_cal = build_illustrative_calibration()
         self.calibrator = BaselineCalibrator(settling_window_seconds=settling_seconds)
@@ -102,6 +203,8 @@ class PipelineWorker(threading.Thread):
 
     def stop(self) -> None:
         self._stop_event.set()
+        if self.secondary_camera is not None:
+            self.secondary_camera.stop()
 
     def dismiss_alert(self, seat_id: str) -> None:
         """docs/architecture.md §10 feedback loop, wired to a real endpoint."""
@@ -112,6 +215,8 @@ class PipelineWorker(threading.Thread):
 
     def run(self) -> None:
         self._start_wall_time = time.time()
+        if self.secondary_camera is not None:
+            self.secondary_camera.start()
         while not self._stop_event.is_set():
             self._loop_count += 1
             self.event_queue.put({"type": "loop_start", "loop": self._loop_count})
@@ -181,7 +286,29 @@ class PipelineWorker(threading.Thread):
                         )
                     self._prev_keypoints[seat_id] = keypoints
 
-                    sample = TemporalSample(timestamp=sim_time, torso_yaw=p.torso_yaw_proxy(), motion_magnitude=motion)
+                    # Occlusion fusion: if the simulated second camera has a
+                    # recent reading for this same seat, combine the two
+                    # (confidence-weighted) before scoring — see
+                    # calibration/multi_camera.py and this file's
+                    # build_synthetic_second_camera_calibration().
+                    primary_obs = SeatObservation(
+                        camera_id=self.seat_cal.camera_id,
+                        torso_yaw=p.torso_yaw_proxy(),
+                        motion_magnitude=motion,
+                        pose_confidence=p.detection_confidence(),
+                    )
+                    fused_cameras = [self.seat_cal.camera_id]
+                    if self.secondary_camera is not None:
+                        secondary_obs = self.secondary_camera.latest_observation(seat_id, sim_time)
+                        if secondary_obs is not None:
+                            fused = fuse_seat_observations([primary_obs, secondary_obs])
+                            fused_cameras = fused.camera_id.split(",")
+                        else:
+                            fused = primary_obs
+                    else:
+                        fused = primary_obs
+
+                    sample = TemporalSample(timestamp=sim_time, torso_yaw=fused.torso_yaw, motion_magnitude=fused.motion_magnitude)
                     self.calibrator.observe(seat_id, sample)
 
                     if not self.calibrator.is_calibrated(seat_id):
@@ -222,7 +349,7 @@ class PipelineWorker(threading.Thread):
 
                     level = "alert" if assessment.risk_score >= 0.5 else ("elevated" if assessment.risk_score >= 0.25 else "calm")
                     seat_risk_this_frame[seat_id] = level
-                    detection_confidence = round(p.detection_confidence(), 2)
+                    detection_confidence = round(fused.pose_confidence, 2)
                     if vis is not None:
                         self._draw_person(vis, p, seat_id, level, assessment.risk_score)
 
@@ -236,6 +363,7 @@ class PipelineWorker(threading.Thread):
                             "motion_z": round(motion_z, 2),
                             "object_label": object_label,
                             "confidence": detection_confidence,
+                            "cameras": fused_cameras,
                         }
                     )
                     if assessment.explanation:

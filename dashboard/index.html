@@ -409,6 +409,7 @@ function renderSeatGrid() {
           <span class="${lowConfidence ? 'text-slate-400' : 'text-slate-400'}">${(s.confidence*100).toFixed(0)}%</span>
         </div>
         ${lowConfidence ? `<div class="text-[9px] mono text-slate-400 mt-1">⚠ visual check recommended — risk score may be unreliable this frame</div>` : ''}
+        ${s.cameras && s.cameras.length > 1 ? `<div class="text-[9px] mono text-violet-300 mt-1" title="occlusion fusion active — combining readings from multiple camera views">⛓ fused: ${s.cameras.join(' + ')}</div>` : ''}
         ` : ''}
       </div>`;
   }).join('');
@@ -632,7 +633,7 @@ function connect() {
     const ev = JSON.parse(msg.data);
     if (ev.type === 'telemetry') {
       const s = seatState[ev.seat_id] || (seatState[ev.seat_id] = {});
-      s.calibrated = true; s.risk = ev.risk_score; s.yaw_z = ev.yaw_z; s.motion_z = ev.motion_z; s.confidence = ev.confidence;
+      s.calibrated = true; s.risk = ev.risk_score; s.yaw_z = ev.yaw_z; s.motion_z = ev.motion_z; s.confidence = ev.confidence; s.cameras = ev.cameras;
       pushRisk(ev.seat_id, ev.timestamp, ev.risk_score);
       renderSeatGrid();
       updateAvgRisk();

@@ -85,12 +85,28 @@ one GPU can realistically run concurrently — this session's multi-worker
 architecture (one `PipelineWorker` per seat-overlap group) means N cameras
 = N independent full pipelines competing for the same GPU.
 
-**6. Soak test**: launched, running in the background against the same
-RTSP stream, sampling RSS/GPU memory/DB growth every 60s
-(`tools/soak_test.py` → `tools/soak_test_results.csv`). See the live
-results reported separately — a genuine multi-hour run takes multi-hours,
-so this report captures what was true when this document was written, not
-a guaranteed final 2-3hr number.
+**6. Soak test**: launched against the same RTSP stream, sampling RSS/GPU
+memory/DB growth every 60s (`tools/soak_test.py` → `tools/soak_test_
+results.csv`). Results through the first 28 minutes (continuing in the
+background past this document being written — a genuine multi-hour run
+takes multi-hours, so this is a real partial result, not a guaranteed
+final number):
+
+| Metric | Result |
+|---|---|
+| RSS (process memory) | Peaked ~1.65GB during model-load warmup, settled to a stable 577-635MB band by minute 5 and stayed there through minute 28 — no growth trend |
+| GPU memory | Flat at 53MB the entire run, zero drift |
+| Frame throughput | ~470 frames/min (~7.8fps), consistent minute to minute |
+| DB/event growth | Growing steadily and linearly with elapsed time (expected — no sign of unbounded accumulation or a leak in the event pipeline) |
+| Crashes/errors | Zero over 28 minutes |
+
+No memory-leak signal in the portion actually observed. This is not the
+same as a validated 2-3hr claim — the settling-window/baseline-drift
+question specifically ("do baselines stay sane over a realistic full exam
+duration") needs the calibration to run through several natural recalcs
+or an intentionally longer window than tested here to say anything past
+"the first baseline computed correctly and nothing degraded obviously in
+28 minutes."
 
 ## Real-world integration gaps (documented, not fixed this pass)
 

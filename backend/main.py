@@ -91,6 +91,31 @@ async def get_seats() -> dict:
     return {"seats": sorted(worker.seat_cal.seats.keys())}
 
 
+@app.get("/api/cameras")
+async def get_cameras() -> dict:
+    """Configured cameras, for the /live multi-camera grid — driven by
+    config/deployment.json, not a hardcoded frontend count. Only the
+    primary camera streams a live JPEG feed (WebSocket "frame" events);
+    secondary cameras (potentially simulated, see config/deployment.json's
+    cam_b_SIMULATED comment) feed occlusion fusion only and have no visual
+    stream of their own — the frontend must not pretend otherwise."""
+    if deployment is None:
+        return {"cameras": []}
+    return {
+        "cameras": [
+            {
+                "camera_id": cam.camera_id,
+                "video_path": cam.video_path,
+                "is_simulated": cam.is_simulated,
+                "is_primary": i == 0,
+                "seats": sorted(cam.calibration.seats.keys()),
+                "streams_live_feed": i == 0,
+            }
+            for i, cam in enumerate(deployment.cameras)
+        ]
+    }
+
+
 @app.post("/api/alerts/{seat_id}/dismiss")
 async def dismiss_alert(seat_id: str) -> dict:
     if worker is not None:
@@ -206,3 +231,15 @@ app.mount("/dashboard-classic", StaticFiles(directory=_classic_dashboard, html=T
 app.mount("/evidence", StaticFiles(directory=_evidence_dir), name="evidence")
 if (_frontend_dist / "assets").exists():
     app.mount("/assets", StaticFiles(directory=_frontend_dist / "assets"), name="frontend-assets")
+
+
+@app.get("/{full_path:path}")
+async def spa_fallback(full_path: str) -> FileResponse:
+    """React Router uses real browser URLs (BrowserRouter, not hash-based),
+    so a direct navigation or refresh on e.g. /overview or /seat/seat_1 hits
+    the server, not just client-side JS — without this catch-all (registered
+    last, after every real route/mount above so it never shadows them) that
+    would 404 instead of loading the app and letting the router take over.
+    Deliberately does NOT catch /api, /ws, /evidence, /assets, /dashboard-
+    classic — those are handled by the explicit routes/mounts above."""
+    return await index()

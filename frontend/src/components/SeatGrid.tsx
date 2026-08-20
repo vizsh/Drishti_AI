@@ -1,9 +1,7 @@
+import { useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { Link2, Eye } from 'lucide-react'
 import type { SeatState } from '../types'
 import { LEVEL_COLOR, riskLevel } from '../lib/colors'
-
-const LOW_CONFIDENCE_THRESHOLD = 0.4
 
 export function SeatGrid({ seats }: { seats: Record<string, SeatState> }) {
   const ids = Object.keys(seats).sort()
@@ -11,7 +9,7 @@ export function SeatGrid({ seats }: { seats: Record<string, SeatState> }) {
     return <div className="text-sm mono text-white/30 py-10 text-center">waiting for the first tracked student…</div>
   }
   return (
-    <div className="grid grid-cols-2 gap-3">
+    <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
       {ids.map((id) => (
         <SeatCard key={id} id={id} seat={seats[id]} />
       ))}
@@ -19,20 +17,28 @@ export function SeatGrid({ seats }: { seats: Record<string, SeatState> }) {
   )
 }
 
+/**
+ * Glance-only card (Problem 1): seat label, status badge, risk bar. That's
+ * it — no yaw_z, no confidence %, no fused-camera string. Everything that
+ * used to render inline here now lives behind the click, on /seat/:seatId.
+ */
 function SeatCard({ id, seat }: { id: string; seat: SeatState }) {
-  const lowConfidence = seat.calibrated && seat.confidence != null && seat.confidence < LOW_CONFIDENCE_THRESHOLD
+  const navigate = useNavigate()
   const level = seat.calibrated ? riskLevel(seat.risk) : 'calibrating'
-  const color = lowConfidence ? '#8b8578' : seat.calibrated ? LEVEL_COLOR[level] : '#8b8578'
+  const color = seat.calibrated ? LEVEL_COLOR[level] : '#8b8578'
   const pct = seat.calibrated ? Math.min(100, seat.risk * 100) : (seat.progress ?? 0) * 100
-  const badge = !seat.calibrated ? 'calibrating' : lowConfidence ? 'low confidence' : level
+  const badgeLabel = seat.calibrated ? (level === 'alert' ? 'critical' : level) : 'calibrating'
 
   return (
-    <motion.div
+    <motion.button
       layout
+      onClick={() => navigate(`/seat/${id}`)}
       animate={seat.flash ? { backgroundColor: ['#ff5a3622', 'transparent'] } : {}}
       transition={{ duration: 1.2 }}
-      className="rounded-2xl p-4 border relative overflow-hidden"
-      style={{ borderColor: `${color}40`, borderStyle: lowConfidence ? 'dashed' : 'solid' }}
+      whileHover={{ scale: 1.02 }}
+      whileTap={{ scale: 0.98 }}
+      className="rounded-2xl p-4 border text-left cursor-pointer relative overflow-hidden"
+      style={{ borderColor: `${color}40` }}
     >
       {seat.calibrated && level === 'alert' && (
         <motion.div
@@ -41,13 +47,13 @@ function SeatCard({ id, seat }: { id: string; seat: SeatState }) {
           transition={{ duration: 1.8, repeat: Infinity }}
         />
       )}
-      <div className="flex items-center justify-between mb-2">
+      <div className="flex items-center justify-between mb-3">
         <span className="font-bold text-sm">{id.replace('_', ' ').toUpperCase()}</span>
         <span className="text-[9px] mono uppercase px-2 py-0.5 rounded-full" style={{ background: `${color}22`, color }}>
-          {badge}
+          {badgeLabel}
         </span>
       </div>
-      <div className="w-full h-1.5 rounded-full bg-white/6 overflow-hidden mb-2">
+      <div className="w-full h-1.5 rounded-full bg-white/6 overflow-hidden">
         <motion.div
           className="h-full rounded-full"
           style={{ background: color }}
@@ -55,21 +61,6 @@ function SeatCard({ id, seat }: { id: string; seat: SeatState }) {
           transition={{ duration: 0.5 }}
         />
       </div>
-      <div className="flex justify-between text-[10px] mono text-white/40">
-        <span>{seat.calibrated ? `risk ${seat.risk.toFixed(2)}` : `${pct.toFixed(0)}% settled`}</span>
-        <span>{seat.calibrated && seat.yawZ != null ? `yaw_z ${seat.yawZ.toFixed(2)}` : ''}</span>
-      </div>
-      {seat.calibrated && seat.confidence != null && (
-        <div className="mt-2 pt-2 border-t border-white/6 flex items-center justify-between text-[10px] mono text-white/40">
-          <span className="flex items-center gap-1"><Eye size={11} /> confidence</span>
-          <span>{(seat.confidence * 100).toFixed(0)}%</span>
-        </div>
-      )}
-      {seat.cameras && seat.cameras.length > 1 && (
-        <div className="flex items-center gap-1 text-[9px] mono mt-1" style={{ color: '#c4a3ff' }}>
-          <Link2 size={10} /> fused: {seat.cameras.join(' + ')}
-        </div>
-      )}
-    </motion.div>
+    </motion.button>
   )
 }

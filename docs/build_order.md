@@ -103,9 +103,17 @@ face blurred.
 (idibag/kinesis-ai-contraband) for labeling — 18 failed on a transient DNS
 blip, retryable via tools/upload_to_roboflow.py.
 
+Pre-exam camera coverage validator (`calibration/coverage.py`) done —
+closes the PS risk table's "Camera Blind Spots" row. Checks every seat on
+the institution's seating chart against each camera's calibration,
+flagging both an uncalibrated seat and a calibrated-but-drifted one (via
+the new `SeatCalibration.project_inverse()`). 5 correctness tests passing.
+Verified live: seats 5-6 (on the demo's wider seating chart, never
+calibrated) correctly flagged BLIND SPOT with an actionable summary.
+
 Next: retrain the Stage 4 object detector once labeling is done, then
 Jetson deployment packaging. Known open gaps vs. the PS's risk table
 (tracked honestly, not hidden): occlusion handling (multi-camera fusion,
 single camera only today), poor-lighting robustness (CLAHE preprocessing,
-not implemented), camera blind-spot coverage validator, and evidence-clip
-access audit logging (who viewed which clip, when).
+not implemented), and evidence-clip access audit logging (who viewed which
+clip, when).

@@ -60,9 +60,20 @@ class VideoSource:
             # TCP transport: docs/architecture.md §1 — UDP drops packets under
             # jitter, unacceptable when a dropped frame could be the exact
             # moment of a phone flash.
+            #
+            # stimeout/rw_timeout (microseconds): found via a real RTSP-
+            # outage test (Part 0.5, 2026-08-21) that cv2.VideoCapture()
+            # blocks *inside its constructor* for FFmpeg's own internal
+            # ~30s socket timeout before failing — cap.set(CAP_PROP_*_
+            # TIMEOUT_MSEC) after construction is too late, the blocking
+            # already happened. These have to go in via the capture-options
+            # env var read *during* construction, the same mechanism
+            # rtsp_transport itself uses. Without this, a dead camera took
+            # ~27s to notice and start retrying, not the reconnect_delay_s
+            # =2.0 the retry loop below implies.
             import os
 
-            os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp"
+            os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "rtsp_transport;tcp|stimeout;5000000|rw_timeout;5000000"
             cap = cv2.VideoCapture(self.source, cv2.CAP_FFMPEG)
         else:
             cap = cv2.VideoCapture(self.source)
@@ -119,7 +130,18 @@ class VideoSource:
 
         while True:
             assert self._cap is not None
-            ok, image = self._cap.read()
+            try:
+                ok, image = self._cap.read()
+            except cv2.error:
+                # Found via a real network-stall test (Part 0.5, 2026-08-21):
+                # a suspended/stalled RTSP source can make .read() raise a
+                # raw cv2.error instead of cleanly returning ok=False. Left
+                # uncaught, this bypasses the reconnect path entirely and
+                # silently kills the ingestion thread with no retry — the
+                # exact "camera drop that never recovers" failure this
+                # module exists to prevent. Treat it the same as ok=False.
+                logger.warning("cv2 read exception for %s, reconnecting", self.source, exc_info=True)
+                ok, image = False, None
 
             if not ok:
                 if is_live:

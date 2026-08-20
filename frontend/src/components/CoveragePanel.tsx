@@ -61,7 +61,7 @@ export function CoveragePanel() {
   const gaps = results.filter((r) => !r.covered).length
 
   return (
-    <div className="rounded-3xl border border-white/8 p-5 mb-6" style={{ background: 'linear-gradient(180deg, #ffffff06, #ffffff01)' }}>
+    <div className="rounded-2xl border border-white/8 p-5 mb-6" style={{ background: 'linear-gradient(180deg, #ffffff06, #ffffff01)' }}>
       <div className="flex items-center justify-between mb-4 flex-wrap gap-3">
         <div>
           <h2 className="text-sm font-bold uppercase tracking-wide">Pre-exam setup — camera coverage</h2>

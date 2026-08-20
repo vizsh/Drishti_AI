@@ -127,8 +127,11 @@ export function DigitalTwinPage() {
                   <ReferenceLine y={2} stroke="#ffb64840" strokeDasharray="3 3" />
                   <ReferenceLine y={-2} stroke="#ffb64840" strokeDasharray="3 3" />
                   <Tooltip contentStyle={{ background: '#0a0a0d', border: '1px solid #ffffff18', borderRadius: 10, fontSize: 11 }} labelFormatter={(v) => `t=${Number(v).toFixed(1)}s`} />
-                  <Line type="monotone" dataKey="yaw_z" name="torso orientation" stroke="#ff5a36" strokeWidth={2} dot={false} isAnimationActive={false} connectNulls />
-                  <Line type="monotone" dataKey="motion_z" name="movement" stroke="#5ad1ff" strokeWidth={2} dot={false} isAnimationActive={false} connectNulls />
+                  {/* Categorical colors distinguishing two data series here,
+                      not status — orientation/movement aren't inherently
+                      "critical" just because a chart line needs a color. */}
+                  <Line type="monotone" dataKey="yaw_z" name="torso orientation" stroke="#5ad1ff" strokeWidth={2} dot={false} isAnimationActive={false} connectNulls />
+                  <Line type="monotone" dataKey="motion_z" name="movement" stroke="#c4a3ff" strokeWidth={2} dot={false} isAnimationActive={false} connectNulls />
                 </LineChart>
               </ResponsiveContainer>
             )}

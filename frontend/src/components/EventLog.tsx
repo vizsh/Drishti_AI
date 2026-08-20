@@ -1,6 +1,7 @@
 import { useEffect, useState, useCallback } from 'react'
 import { RefreshCw } from 'lucide-react'
 import { seatColor } from '../lib/colors'
+import { Badge } from './Badge'
 
 interface EventRow {
   id: number
@@ -12,11 +13,12 @@ interface EventRow {
   evidence_url: string | null
 }
 
-const TYPE_STYLE: Record<string, { bg: string; color: string }> = {
-  alert: { bg: '#ff5a3622', color: '#ff5a36' },
-  gesture_alert: { bg: '#c4a3ff22', color: '#c4a3ff' },
-  feedback: { bg: '#5ad1ff22', color: '#5ad1ff' },
-  telemetry: { bg: '#ffffff14', color: '#8b8578' },
+// alert/calibration_warning are the only event types with real urgency —
+// everything else (gesture, feedback, dispatch, telemetry) is a neutral
+// informational log line, not a status signal.
+const TYPE_TONE: Record<string, 'critical' | 'watch' | 'neutral'> = {
+  alert: 'critical',
+  calibration_warning: 'watch',
 }
 
 export function EventLog({ onViewEvidence }: { onViewEvidence: (url: string) => void }) {
@@ -68,7 +70,7 @@ export function EventLog({ onViewEvidence }: { onViewEvidence: (url: string) => 
             placeholder="search explanation…"
             className="bg-transparent border border-white/12 rounded-lg px-3 py-1.5 text-xs mono w-48"
           />
-          <button onClick={load} className="flex items-center gap-1 text-xs mono px-3 py-1.5 rounded-lg border border-white/12" style={{ color: '#5ad1ff' }}>
+          <button onClick={load} className="flex items-center gap-1 text-xs mono px-3 py-1.5 rounded-lg border border-white/12 text-white/60 hover:text-white/90">
             <RefreshCw size={12} /> refresh
           </button>
         </div>
@@ -89,17 +91,17 @@ export function EventLog({ onViewEvidence }: { onViewEvidence: (url: string) => 
               <tr><td colSpan={5} className="px-4 py-6 text-center text-white/30 mono">no matching events</td></tr>
             )}
             {events.map((ev) => {
-              const style = TYPE_STYLE[ev.event_type] ?? { bg: '#ffffff14', color: '#8b8578' }
+              const tone = TYPE_TONE[ev.event_type] ?? 'neutral'
               return (
                 <tr key={ev.id} className="border-b border-white/5 hover:bg-white/[0.02]">
                   <td className="px-4 py-2 mono text-white/40">{ev.sim_time.toFixed(1)}s</td>
                   <td className="px-4 py-2 font-semibold" style={{ color: seatColor(ev.seat_id, knownSeats) }}>{ev.seat_id.toUpperCase()}</td>
-                  <td className="px-4 py-2"><span className="text-[9px] mono px-1.5 py-0.5 rounded" style={{ background: style.bg, color: style.color }}>{ev.event_type}</span></td>
+                  <td className="px-4 py-2"><Badge tone={tone}>{ev.event_type}</Badge></td>
                   <td className="px-4 py-2 mono text-white/40">{ev.risk_score != null ? ev.risk_score.toFixed(2) : '—'}</td>
                   <td className="px-4 py-2 text-white/70">
                     {ev.explanation ?? '—'}
                     {ev.evidence_url && (
-                      <button onClick={() => onViewEvidence(ev.evidence_url!)} className="ml-2 text-[10px] mono" style={{ color: '#5ad1ff' }}>▶ evidence</button>
+                      <button onClick={() => onViewEvidence(ev.evidence_url!)} className="ml-2 text-[10px] mono text-white/50 hover:text-white/80">▶ evidence</button>
                     )}
                   </td>
                 </tr>

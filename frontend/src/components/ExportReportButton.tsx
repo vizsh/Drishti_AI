@@ -38,8 +38,7 @@ export function ExportReportButton() {
     <button
       onClick={handleExport}
       disabled={loading}
-      className="flex items-center gap-2 text-xs mono px-4 py-2.5 rounded-xl border shrink-0 self-start"
-      style={{ borderColor: '#ffb64840', color: '#ffb648', background: '#ffb64810' }}
+      className="flex items-center gap-2 text-xs mono px-4 py-2.5 rounded-xl border border-white/15 text-white/70 hover:border-white/30 hover:text-white/90 shrink-0 self-start"
     >
       {loading ? <Loader2 size={14} className="animate-spin" /> : <FileDown size={14} />}
       {loading ? 'generating…' : 'export session report'}

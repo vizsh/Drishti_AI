@@ -12,6 +12,7 @@ import { AlertsPage } from './pages/AlertsPage'
 import { AnalyticsPage } from './pages/AnalyticsPage'
 import { EvidenceVaultPage } from './pages/EvidenceVaultPage'
 import { SettingsPage } from './pages/SettingsPage'
+import { TrustCompliancePage } from './pages/TrustCompliancePage'
 
 export default function App() {
   return (
@@ -37,6 +38,7 @@ export default function App() {
               <Route path="/evidence-vault" element={<EvidenceVaultPage />} />
               <Route path="/analytics" element={<AnalyticsPage />} />
               <Route path="/settings" element={<SettingsPage />} />
+              <Route path="/trust" element={<TrustCompliancePage />} />
               <Route path="*" element={<Navigate to="/command-center" replace />} />
             </Route>
           </Routes>

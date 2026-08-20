@@ -76,7 +76,7 @@ export function SessionAnalytics() {
                   <div className="relative flex-1 h-4 rounded-full bg-white/5">
                     {bySeat[seatId].map((ev, i) => {
                       const pct = Math.min(100, Math.max(0, ((ev.sim_time - windowStart) / TIMELINE_WINDOW_S) * 100))
-                      const color = ev.event_type === 'alert' ? '#ff5a36' : '#c4a3ff'
+                      const color = ev.event_type === 'alert' ? '#ff5a36' : '#8b8578'
                       return (
                         <div
                           key={i}

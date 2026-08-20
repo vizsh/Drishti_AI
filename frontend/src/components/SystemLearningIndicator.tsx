@@ -37,9 +37,9 @@ export function SystemLearningIndicator() {
   const dismissed = data?.false_positives_dismissed ?? 0
 
   return (
-    <div className="rounded-2xl border border-white/8 px-5 py-4 mb-6 flex items-center gap-4" style={{ background: 'linear-gradient(180deg, #5ad1ff10, #5ad1ff02)' }}>
-      <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0" style={{ background: '#5ad1ff22' }}>
-        <Brain size={18} color="#5ad1ff" />
+    <div className="rounded-2xl border border-white/8 px-5 py-4 mb-6 flex items-center gap-4 bg-white/3">
+      <div className="w-10 h-10 rounded-xl flex items-center justify-center shrink-0 bg-white/8">
+        <Brain size={18} className="text-ink-dim" />
       </div>
       <div>
         <div className="text-[10px] mono uppercase tracking-widest text-white/40">system learning</div>

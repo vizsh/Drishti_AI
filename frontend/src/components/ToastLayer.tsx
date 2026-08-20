@@ -4,15 +4,18 @@ import { AnimatePresence, motion } from 'framer-motion'
 import { AlertTriangle, Hand, Radar, X } from 'lucide-react'
 import { useLive } from '../state/LiveContext'
 import { useHallScope } from '../state/useHallScope'
+import { Badge } from './Badge'
 import type { AlertItem } from '../types'
 
 const AUTO_DISMISS_MS = 7000
 const MAX_VISIBLE = 4
 
+// Same three-tone system as everywhere else — critical for a real alert,
+// watch for a calibration-issue signal, neutral for a gesture note.
 const KIND_STYLE: Record<AlertItem['kind'], { icon: typeof AlertTriangle; color: string; label: string }> = {
-  alert: { icon: AlertTriangle, color: '#ff5a36', label: 'ALERT' },
-  gesture: { icon: Hand, color: '#c4a3ff', label: 'GESTURE' },
-  calibration_warning: { icon: Radar, color: '#5ad1ff', label: 'CALIBRATION' },
+  alert: { icon: AlertTriangle, color: '#ff5a36', label: 'Alert' },
+  gesture: { icon: Hand, color: '#8b8578', label: 'Gesture' },
+  calibration_warning: { icon: Radar, color: '#ffb648', label: 'Calibration' },
 }
 
 // Real-time toast layer, mounted once in AppLayout so it persists across
@@ -72,9 +75,7 @@ export function ToastLayer() {
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2 mb-0.5">
                     <span className="text-xs font-bold">{t.seatId.toUpperCase()}</span>
-                    <span className="text-[9px] mono px-1.5 py-0.5 rounded" style={{ background: `${style.color}22`, color: style.color }}>
-                      {style.label}
-                    </span>
+                    <Badge tone={t.kind === 'alert' ? 'critical' : t.kind === 'calibration_warning' ? 'watch' : 'neutral'}>{style.label}</Badge>
                   </div>
                   <p className="text-[11px] text-white/70 leading-snug line-clamp-2">{t.explanation}</p>
                 </div>

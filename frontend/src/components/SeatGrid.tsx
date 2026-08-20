@@ -1,12 +1,20 @@
 import { useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
+import { UserRoundSearch } from 'lucide-react'
 import type { SeatState } from '../types'
-import { LEVEL_COLOR, riskLevel } from '../lib/colors'
+import { STATUS_COLOR, riskLevel } from '../lib/colors'
+import { EmptyState } from './EmptyState'
 
 export function SeatGrid({ seats }: { seats: Record<string, SeatState> }) {
   const ids = Object.keys(seats).sort()
   if (ids.length === 0) {
-    return <div className="text-sm mono text-white/30 py-10 text-center">waiting for the first tracked student…</div>
+    return (
+      <EmptyState
+        icon={UserRoundSearch}
+        title="Waiting for the first tracked student"
+        body="Seats appear here as soon as the camera detects and seat-anchors someone. Each seat then runs its own ~20 second baseline calibration before risk scoring starts."
+      />
+    )
   }
   return (
     <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
@@ -24,10 +32,10 @@ export function SeatGrid({ seats }: { seats: Record<string, SeatState> }) {
  */
 function SeatCard({ id, seat }: { id: string; seat: SeatState }) {
   const navigate = useNavigate()
-  const level = seat.calibrated ? riskLevel(seat.risk) : 'calibrating'
-  const color = seat.calibrated ? LEVEL_COLOR[level] : '#8b8578'
+  const level = seat.calibrated ? riskLevel(seat.risk) : null
+  const color = level ? STATUS_COLOR[level] : '#8b8578'
   const pct = seat.calibrated ? Math.min(100, seat.risk * 100) : (seat.progress ?? 0) * 100
-  const badgeLabel = seat.calibrated ? (level === 'alert' ? 'critical' : level) : 'calibrating'
+  const badgeLabel = level ?? 'calibrating'
 
   return (
     <motion.button
@@ -40,7 +48,7 @@ function SeatCard({ id, seat }: { id: string; seat: SeatState }) {
       className="rounded-2xl p-4 border text-left cursor-pointer relative overflow-hidden"
       style={{ borderColor: `${color}40` }}
     >
-      {seat.calibrated && level === 'alert' && (
+      {level === 'critical' && (
         <motion.div
           className="absolute inset-0 pointer-events-none"
           animate={{ boxShadow: ['inset 0 0 0px #ff5a3600', 'inset 0 0 30px #ff5a3655', 'inset 0 0 0px #ff5a3600'] }}
@@ -49,7 +57,7 @@ function SeatCard({ id, seat }: { id: string; seat: SeatState }) {
       )}
       <div className="flex items-center justify-between mb-3">
         <span className="font-bold text-sm">{id.replace('_', ' ').toUpperCase()}</span>
-        <span className="text-[9px] mono uppercase px-2 py-0.5 rounded-full" style={{ background: `${color}22`, color }}>
+        <span className="text-[10px] mono uppercase px-2 py-0.5 rounded-full" style={{ background: `${color}22`, color }}>
           {badgeLabel}
         </span>
       </div>

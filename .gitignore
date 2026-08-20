@@ -29,3 +29,16 @@ Thumbs.db
 .vscode/
 .idea/
 .claude/
+
+# Part 0.5 RTSP-readiness testing tools (downloaded binaries / generated
+# output, not source) — tools/soak_test.py itself IS tracked.
+tools/mediamtx/mediamtx.exe
+tools/mediamtx/mediamtx.yml
+tools/mediamtx/mediamtx.zip
+tools/mediamtx/LICENSE
+tools/mediamtx/auto.crt
+tools/mediamtx/auto.key
+tools/mediamtx/*.log
+tools/soak_test_results.csv
+tools/soak_test.db
+tmp_ffmpeg_bin_path.txt

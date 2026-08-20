@@ -1,12 +1,13 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { useParams, Link } from 'react-router-dom'
-import { ArrowLeft, Link2, Eye, Fingerprint } from 'lucide-react'
+import { ArrowLeft, Link2, Eye, Fingerprint, UserRoundSearch } from 'lucide-react'
 import { RiskTrendChart } from '../components/RiskTrendChart'
 import { AlertFeed } from '../components/AlertFeed'
 import { EvidenceModal } from '../components/EvidenceModal'
+import { EmptyState } from '../components/EmptyState'
 import { useLive } from '../state/LiveContext'
 import { useHallScope } from '../state/useHallScope'
-import { LEVEL_COLOR, riskLevel } from '../lib/colors'
+import { STATUS_COLOR, riskLevel } from '../lib/colors'
 
 interface EventRow {
   id: number
@@ -56,7 +57,11 @@ export function SeatDetailPage() {
       </Link>
 
       {!seat ? (
-        <div className="text-sm mono text-white/30 py-16 text-center">no data for {seatId} yet</div>
+        <EmptyState
+          icon={UserRoundSearch}
+          title={`No data for ${seatId.replace('_', ' ').toUpperCase()} yet`}
+          body="This seat hasn't been tracked yet this session — either it's empty, or the camera hasn't picked up a person there. It'll appear here automatically once it does."
+        />
       ) : (
         <>
           <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
@@ -66,8 +71,7 @@ export function SeatDetailPage() {
             </div>
             <Link
               to={`/twin/${seatId}`}
-              className="flex items-center gap-1.5 text-[11px] mono px-3 py-1.5 rounded-full border"
-              style={{ borderColor: '#c4a3ff40', color: '#c4a3ff' }}
+              className="flex items-center gap-1.5 text-[11px] mono px-3 py-1.5 rounded-full border border-white/15 text-white/60 hover:border-white/30 hover:text-white/90"
             >
               <Fingerprint size={12} /> behavioural profile
             </Link>
@@ -132,8 +136,8 @@ export function SeatDetailPage() {
 }
 
 function StatusBadge({ seat }: { seat: { calibrated: boolean; risk: number } }) {
-  const level = seat.calibrated ? riskLevel(seat.risk) : 'calibrating'
-  const color = seat.calibrated ? LEVEL_COLOR[level] : '#8b8578'
+  const level = seat.calibrated ? riskLevel(seat.risk) : null
+  const color = level ? STATUS_COLOR[level] : '#8b8578'
   return (
     <span className="text-xs mono uppercase px-3 py-1 rounded-full" style={{ background: `${color}22`, color }}>
       {seat.calibrated ? level : 'calibrating'}

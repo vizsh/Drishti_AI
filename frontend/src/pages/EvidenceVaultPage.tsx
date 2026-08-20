@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { FolderOpen } from 'lucide-react'
 import { EvidenceModal } from '../components/EvidenceModal'
+import { EmptyState } from '../components/EmptyState'
 import { useHallScope } from '../state/useHallScope'
 import { seatColor } from '../lib/colors'
 
@@ -40,7 +41,11 @@ export function EvidenceVaultPage() {
       </p>
 
       {scoped.length === 0 ? (
-        <div className="text-sm mono text-white/30 py-16 text-center">no evidence clips yet this session</div>
+        <EmptyState
+          icon={FolderOpen}
+          title="No evidence clips yet"
+          body="A clip is generated automatically the first time an alert fires — faces blurred, before it's ever stored. Nothing has triggered one yet this session."
+        />
       ) : (
         <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
           {scoped.map((e) => (
@@ -58,7 +63,7 @@ export function EvidenceVaultPage() {
               <p className="text-[11px] text-white/60 leading-snug mb-2 line-clamp-3">{e.explanation}</p>
               <div className="flex items-center justify-between text-[10px] mono text-white/30">
                 <span>risk {e.risk_score?.toFixed(2) ?? '—'}</span>
-                <span style={{ color: '#5ad1ff' }}>▶ view clip</span>
+                <span className="text-white/50">▶ view clip</span>
               </div>
             </button>
           ))}

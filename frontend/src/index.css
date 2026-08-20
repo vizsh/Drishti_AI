@@ -1,12 +1,37 @@
 @import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
 @import "tailwindcss";
 
+/* Design system (Step 0 audit, 2026-08-21): the three status colors are the
+   ONLY saturated colors in the app. Everything else — brand mark included —
+   is neutral, so a critical alert is never competing with routine chrome
+   for the eye's attention. Generates real Tailwind utilities (bg-calm,
+   text-critical/70, border-watch/40, etc.) so components stop hardcoding
+   hex — one source of truth instead of the same color repeated as a
+   literal string in 20 files. */
+@theme {
+  --color-calm: #8dff9e;
+  --color-watch: #ffb648;
+  --color-critical: #ff5a36;
+
+  --color-ink: #f4f1ea;
+  --color-ink-dim: #8b8578;
+  --color-void: #060608;
+  --color-surface: #0a0a0d;
+
+  /* Categorical palette for distinguishing seats in charts/legends — a
+     different job from status color (identity, not urgency), so it keeps
+     its own small set of hues rather than being folded into calm/watch/
+     critical. Never used for anything status-like. */
+  --color-seat-1: #5ad1ff;
+  --color-seat-2: #c4a3ff;
+  --color-seat-3: #ff6bd6;
+  --color-seat-4: #6be6c1;
+}
+
 :root {
   --bg-void: #060608;
   --ink: #f4f1ea;
   --ink-dim: #8b8578;
-  --accent: #ff5a36;
-  --accent-2: #ffb648;
   --line: #ffffff14;
   color-scheme: dark;
 }

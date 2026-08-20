@@ -34,15 +34,15 @@ export function LoginPage() {
       <motion.div
         initial={{ opacity: 0, y: 12 }}
         animate={{ opacity: 1, y: 0 }}
-        className="w-full max-w-sm rounded-3xl border border-white/10 p-8"
+        className="w-full max-w-sm rounded-2xl border border-white/10 p-8"
         style={{ background: 'linear-gradient(180deg, #ffffff08, #ffffff02)' }}
       >
         <div className="flex items-center gap-3 mb-8">
-          <div className="w-10 h-10 rounded-xl flex items-center justify-center" style={{ background: 'linear-gradient(135deg, #ff5a36, #ffb648)' }}>
-            <Radar size={18} color="#060608" strokeWidth={2.4} />
+          <div className="w-10 h-10 rounded-xl flex items-center justify-center bg-white/10">
+            <Radar size={18} className="text-ink" strokeWidth={2.4} />
           </div>
           <div>
-            <h1 className="text-lg font-bold leading-none">KINESIS<span style={{ color: '#ff5a36' }}>.</span></h1>
+            <h1 className="text-lg font-bold leading-none">KINESIS<span className="text-white/40">.</span></h1>
             <p className="text-[10px] mono uppercase tracking-widest text-white/40 mt-0.5">exam behaviour monitor</p>
           </div>
         </div>
@@ -70,11 +70,10 @@ export function LoginPage() {
               placeholder="••••••••"
             />
           </label>
-          {error && <p className="text-xs mono" style={{ color: '#ff5a36' }}>{error}</p>}
+          {error && <p className="text-xs mono text-critical">{error}</p>}
           <button
             type="submit"
-            className="mt-2 flex items-center justify-center gap-2 text-sm font-bold px-4 py-2.5 rounded-lg"
-            style={{ background: 'linear-gradient(135deg, #ff5a36, #ffb648)', color: '#060608' }}
+            className="mt-2 flex items-center justify-center gap-2 text-sm font-bold px-4 py-2.5 rounded-lg bg-watch text-void"
           >
             <Lock size={14} /> Sign in
           </button>

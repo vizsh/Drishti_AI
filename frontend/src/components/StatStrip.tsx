@@ -20,7 +20,9 @@ export function StatStrip({ seatsMonitored, calibrated, alerts, avgRisk }: Props
   const items = [
     { label: 'seats monitored', value: seatsMonitored, decimals: 0 },
     { label: 'calibrated', value: calibrated, decimals: 0 },
-    { label: 'alerts (session)', value: alerts, decimals: 0, accent: true },
+    // Amber only once there's actually something to watch — a zero-alert
+    // count shouldn't draw the eye the same way a nonzero one should.
+    { label: 'alerts (session)', value: alerts, decimals: 0, accent: alerts > 0 },
     { label: 'avg risk', value: avgRisk, decimals: 2 },
   ]
   return (
@@ -31,11 +33,10 @@ export function StatStrip({ seatsMonitored, calibrated, alerts, avgRisk }: Props
           initial={{ opacity: 0, y: 8 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ delay: i * 0.05 }}
-          className="rounded-2xl px-5 py-4 border border-white/8"
-          style={{ background: 'linear-gradient(180deg, #ffffff08, #ffffff02)' }}
+          className="rounded-2xl px-5 py-4 border border-white/8 bg-white/3"
         >
           <div className="text-[10px] mono uppercase tracking-widest text-white/35 mb-1.5">{it.label}</div>
-          <div className="text-3xl font-bold tabular-nums" style={{ color: it.accent ? '#ffb648' : '#f4f1ea' }}>
+          <div className={`text-3xl font-bold tabular-nums ${it.accent ? 'text-watch' : 'text-ink'}`}>
             <AnimatedNumber value={it.value} decimals={it.decimals} />
           </div>
         </motion.div>

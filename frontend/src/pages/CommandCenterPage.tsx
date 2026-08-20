@@ -1,11 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { Video, VideoOff, X, AlertTriangle } from 'lucide-react'
+import { Video, VideoOff, X, AlertTriangle, CameraOff } from 'lucide-react'
 import { LiveFeed } from '../components/LiveFeed'
+import { Badge } from '../components/Badge'
+import { ValueStats } from '../components/ValueStats'
+import { EmptyState } from '../components/EmptyState'
 import { useLive } from '../state/LiveContext'
 import { useHallScope, type CameraInfo } from '../state/useHallScope'
-import { riskLevel } from '../lib/colors'
+import { riskLevel, type StatusLevel } from '../lib/colors'
 
 /**
  * Phase 2 — Command Center: the default landing view after login. A real
@@ -41,19 +44,19 @@ export function CommandCenterPage() {
 
   const focused = cameras.find((c) => c.camera_id === focusedId)
 
-  function severityFor(cam: CameraInfo): { level: 'calm' | 'watch' | 'critical'; count: number; worstSeat: string | null } {
-    let level: 'calm' | 'watch' | 'critical' = 'calm'
+  function severityFor(cam: CameraInfo): { level: StatusLevel; count: number; worstSeat: string | null } {
+    let level: StatusLevel = 'calm'
     let count = 0
     let worstSeat: string | null = null
     for (const seatId of cam.seats) {
       const s = seats[seatId]
       if (!s?.calibrated) continue
       const l = riskLevel(s.risk)
-      if (l === 'alert') {
+      if (l === 'critical') {
         level = 'critical'
         count += 1
         worstSeat = seatId
-      } else if (l === 'elevated' && level !== 'critical') {
+      } else if (l === 'watch' && level !== 'critical') {
         level = 'watch'
         count += 1
         if (!worstSeat) worstSeat = seatId
@@ -89,15 +92,22 @@ export function CommandCenterPage() {
   }
 
   if (cameras.length === 0) {
-    return <div className="text-sm mono text-white/30 py-16 text-center">no cameras configured for your access scope</div>
+    return (
+      <EmptyState
+        icon={CameraOff}
+        title="No cameras configured for your access scope"
+        body="Either no cameras have been added to this deployment yet, or none are assigned to a hall you have access to. Camera-to-hall assignment is set in config/deployment.json by whoever configured this deployment."
+      />
+    )
   }
 
   return (
     <div>
       <h1 className="text-lg font-bold mb-1">Command Center</h1>
-      <p className="text-xs mono text-white/35 mb-6">
+      <p className="text-xs mono text-white/35 mb-4">
         {cameras.length} camera{cameras.length === 1 ? '' : 's'} · only the opened tile runs full live decode — everything else is a periodic snapshot
       </p>
+      <ValueStats />
       {halls.map((hall) => {
         const hallCameras = cameras.filter((c) => c.hall === hall)
         if (hallCameras.length === 0) return null
@@ -116,8 +126,8 @@ export function CommandCenterPage() {
   )
 }
 
-const BORDER_COLOR = { calm: '#ffffff1a', watch: '#ffb64870', critical: '#ff5a3690' }
-const GLOW = { calm: '', watch: 'shadow-[0_0_20px_-4px_#ffb64860]', critical: 'shadow-[0_0_28px_-2px_#ff5a3680]' }
+const BORDER_COLOR: Record<StatusLevel, string> = { calm: '#ffffff1a', watch: '#ffb64870', critical: '#ff5a3690' }
+const GLOW: Record<StatusLevel, string> = { calm: '', watch: 'shadow-[0_0_20px_-4px_#ffb64860]', critical: 'shadow-[0_0_28px_-2px_#ff5a3680]' }
 
 function CameraTile({
   cam,
@@ -127,7 +137,7 @@ function CameraTile({
 }: {
   cam: CameraInfo
   snapshot: string | null
-  severity: { level: 'calm' | 'watch' | 'critical'; count: number }
+  severity: { level: StatusLevel; count: number }
   onOpen: () => void
 }) {
   const clickable = cam.streams_live_feed || severity.level === 'critical'
@@ -148,15 +158,14 @@ function CameraTile({
             {cam.streams_live_feed ? <Video size={20} className="text-white/20" /> : <VideoOff size={20} className="text-white/20" />}
           </div>
         )}
-        <div className="absolute top-2 left-2 flex items-center gap-1.5 px-2 py-1 rounded-md text-[9px] mono bg-black/60">
-          {cam.is_simulated ? 'SIMULATED' : 'LIVE'}
+        <div className="absolute top-2 left-2">
+          <Badge tone="neutral">{cam.is_simulated ? 'SIMULATED' : 'LIVE'}</Badge>
         </div>
         {severity.level !== 'calm' && (
-          <div
-            className="absolute top-2 right-2 flex items-center gap-1 px-2 py-1 rounded-md text-[9px] mono font-bold"
-            style={{ background: severity.level === 'critical' ? '#ff5a36' : '#ffb648', color: '#060608' }}
-          >
-            <AlertTriangle size={10} /> {severity.count}
+          <div className="absolute top-2 right-2">
+            <Badge tone={severity.level}>
+              <AlertTriangle size={10} /> {severity.count}
+            </Badge>
           </div>
         )}
       </div>

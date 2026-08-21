@@ -26,6 +26,7 @@ from calibration.multi_camera import SeatObservation, fuse_seat_observations
 from backend.deployment_config import CameraConfig
 from backend.evidence import EVIDENCE_DIR, RollingFrameBuffer, estimate_head_bbox, save_evidence_clip
 from calibration.quality import SeatAnchorQualityTracker
+from calibration.compute_budget import SeatComputeBudget
 from ingestion.video_source import VideoSource
 from perception.lighting import enhance_if_dark
 from perception.motion_heatmap import MotionHeatmapAccumulator
@@ -158,6 +159,7 @@ class PipelineWorker(threading.Thread):
         self.risk_engine = RiskEngine()
         self.gesture_detector = GestureDetector(self.seat_cal)
         self.anchor_quality = SeatAnchorQualityTracker(camera_id=self.camera_id)
+        self.compute_budget = SeatComputeBudget(base_interval_frames=object_detect_every_n_frames)
         self.pose_estimator = PoseEstimator(device=device)
         self.frame_buffer = RollingFrameBuffer(max_seconds=35.0)
         self.heatmap: Optional[MotionHeatmapAccumulator] = None  # lazily sized on first frame
@@ -351,12 +353,26 @@ class PipelineWorker(threading.Thread):
                 # fix (some desks/partitions still trigger within a
                 # student's own crop), so this stays tagged "experimental"
                 # in the UI exactly as before, just measurably better.
+                # Phase 2c (2026-08-21): per-seat adaptive cadence — a seat
+                # sustained-calm for 10+ minutes checks far less often, a
+                # seat that isn't drops back to full rate immediately. Only
+                # applies to this per-person ROI check (see
+                # calibration/compute_budget.py's docstring for why the
+                # shared full-frame pose pass above can't do the same).
                 object_detections: list = []
-                if self._frame_counter % self.object_detect_every_n_frames == 0:
-                    for p in poses:
-                        roi = workspace_roi(p, self.image_width, self.image_height)
-                        if roi is not None:
-                            object_detections.extend(detect_in_roi(self.object_detector, detect_input, roi))
+                for p in poses:
+                    if p.track_id is None:
+                        continue
+                    ox1, oy1, ox2, oy2 = p.xyxy
+                    obj_seat_id, _ = self.seat_cal.nearest_seat(((ox1 + ox2) / 2.0, oy2))
+                    if obj_seat_id is None:
+                        continue
+                    interval = self.compute_budget.object_detect_interval(obj_seat_id, sim_time)
+                    if self._frame_counter % interval != 0:
+                        continue
+                    roi = workspace_roi(p, self.image_width, self.image_height)
+                    if roi is not None:
+                        object_detections.extend(detect_in_roi(self.object_detector, detect_input, roi))
 
                 vis = (
                     frame.image
@@ -450,6 +466,7 @@ class PipelineWorker(threading.Thread):
                             {"type": "calibrating", "seat_id": seat_id, "progress": progress, "timestamp": sim_time}
                         )
                         seat_risk_this_frame[seat_id] = "calibrating"
+                        self.compute_budget.observe(seat_id, sim_time, "calibrating")
                         if vis is not None:
                             self._draw_person(vis, p, seat_id, "calibrating", None)
                         continue
@@ -483,6 +500,7 @@ class PipelineWorker(threading.Thread):
 
                     level = "alert" if assessment.risk_score >= 0.5 else ("elevated" if assessment.risk_score >= 0.25 else "calm")
                     seat_risk_this_frame[seat_id] = level
+                    self.compute_budget.observe(seat_id, sim_time, level)
                     detection_confidence = round(fused.pose_confidence, 2)
                     if vis is not None:
                         self._draw_person(vis, p, seat_id, level, assessment.risk_score)

@@ -19,6 +19,34 @@ from risk_engine.events import DeviationEvent, SustainedDeviationDetector
 from risk_engine.explain import explain_event
 from risk_engine.pattern import EventPatternTracker
 
+# Part G Tier 1 (2026-08-21): exam-type weight profiles. yaw/motion used to
+# share one "deviation" weight (whichever z-score was larger dominated) -
+# split apart here specifically so MCQ and Written can weight them
+# differently, per the reasoning each profile's comment gives. All five
+# weights per profile sum to 1.0; "mixed" reproduces the old undifferentiated
+# behaviour (yaw and motion each get half of the old 0.4 weight_deviation).
+EXAM_TYPE_PROFILES: dict[str, dict[str, float]] = {
+    "mixed": {"weight_yaw": 0.20, "weight_motion": 0.20, "weight_pattern": 0.25, "weight_object": 0.15, "weight_gesture": 0.20},
+    "mcq": {
+        # Marking answers is brief/periodic hand motion - SUSTAINED or
+        # REPEATED hand movement (gesture, and motion staying elevated
+        # rather than briefly spiking) is more anomalous here than in a
+        # written exam, so both go up. A single glance can copy an MCQ
+        # answer, so gaze/head-turn (yaw) also weights higher. Object
+        # detection (paper/chit) matters less for an exam with no paper.
+        "weight_yaw": 0.30, "weight_motion": 0.20, "weight_pattern": 0.15, "weight_object": 0.05, "weight_gesture": 0.30,
+    },
+    "written": {
+        # Hand motion is near-constant (writing) and uninformative on its
+        # own - weight way down. Weight shifts to sustained gaze/head-turn
+        # (yaw), object detection (a written exam has actual paper on the
+        # desk, so paper/chit-passing signals are meaningful here in a way
+        # they aren't for MCQ), and the pattern tracker (repeated behaviour
+        # over the session matters more than a single blip either way).
+        "weight_yaw": 0.30, "weight_motion": 0.05, "weight_pattern": 0.20, "weight_object": 0.35, "weight_gesture": 0.10,
+    },
+}
+
 
 @dataclass
 class RiskAssessment:
@@ -35,20 +63,24 @@ class RiskEngine:
         zscore_threshold: float = 2.5,
         min_event_duration: float = 1.5,
         pattern_window_seconds: float = 300.0,
-        weight_deviation: float = 0.4,
+        weight_yaw: float = 0.20,
+        weight_motion: float = 0.20,
         weight_pattern: float = 0.25,
         weight_object: float = 0.15,
-        weight_gesture: float = 0.2,
+        weight_gesture: float = 0.20,
         alert_min_duration: float = 3.5,
         alert_min_repeat_count: int = 2,
         alert_cap_when_uncorroborated: float = 0.45,
+        exam_type: str = "mixed",
     ):
         self.detector = SustainedDeviationDetector(zscore_threshold, min_event_duration)
         self.pattern_tracker = EventPatternTracker(pattern_window_seconds)
-        self.weight_deviation = weight_deviation
+        self.weight_yaw = weight_yaw
+        self.weight_motion = weight_motion
         self.weight_pattern = weight_pattern
         self.weight_object = weight_object
         self.weight_gesture = weight_gesture
+        self.exam_type = exam_type
         # Part B (2026-08-21 pre-demo hardening): min_event_duration (above)
         # is the floor for "is this even a real DeviationEvent" (debounces
         # single-frame noise) - confirmed via risk_engine/events.py that
@@ -61,6 +93,20 @@ class RiskEngine:
         self.alert_min_duration = alert_min_duration
         self.alert_min_repeat_count = alert_min_repeat_count
         self.alert_cap_when_uncorroborated = alert_cap_when_uncorroborated
+
+    def apply_profile(self, exam_type: str) -> None:
+        """Part G Tier 1: swaps the five signal weights to the named exam-
+        type profile in place — keeps the detector/pattern_tracker's
+        in-progress state (an in-flight deviation, recent event history)
+        intact, since this only changes how signals are WEIGHTED, not
+        what's been observed so far this session."""
+        profile = EXAM_TYPE_PROFILES.get(exam_type, EXAM_TYPE_PROFILES["mixed"])
+        self.weight_yaw = profile["weight_yaw"]
+        self.weight_motion = profile["weight_motion"]
+        self.weight_pattern = profile["weight_pattern"]
+        self.weight_object = profile["weight_object"]
+        self.weight_gesture = profile["weight_gesture"]
+        self.exam_type = exam_type if exam_type in EXAM_TYPE_PROFILES else "mixed"
 
     def observe(
         self,
@@ -106,17 +152,19 @@ class RiskEngine:
                 )
             )
 
-        deviation_component = 0.0
-        for z in (yaw_zscore, motion_zscore):
-            if z is not None:
-                deviation_component = max(deviation_component, min(abs(z) / 5.0, 1.0))
+        # Part G Tier 1: yaw and motion weighted separately (used to share
+        # one "deviation" weight via max(), so a profile could never make
+        # them differ) - lets the exam-type profile push them apart.
+        yaw_component = min(abs(yaw_zscore) / 5.0, 1.0) if yaw_zscore is not None else 0.0
+        motion_component = min(abs(motion_zscore) / 5.0, 1.0) if motion_zscore is not None else 0.0
 
         pattern_component = min(self.pattern_tracker.pattern_score(seat_id, timestamp) / 3.0, 1.0)
         object_component = object_confidence if object_label else 0.0
         gesture_component = 1.0 if gesture_active else 0.0
 
         risk_score = (
-            self.weight_deviation * deviation_component
+            self.weight_yaw * yaw_component
+            + self.weight_motion * motion_component
             + self.weight_pattern * pattern_component
             + self.weight_object * object_component
             + self.weight_gesture * gesture_component

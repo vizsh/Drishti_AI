@@ -1,6 +1,7 @@
 import { Link } from 'react-router-dom'
 import { Settings as SettingsIcon, ShieldCheck, ChevronRight, PlayCircle, Camera } from 'lucide-react'
 import { useAuth, DEMO_ACCOUNTS } from '../state/AuthContext'
+import { ExamTypeSelector } from '../components/ExamTypeSelector'
 
 export function SettingsPage() {
   const { user } = useAuth()
@@ -29,6 +30,8 @@ export function SettingsPage() {
           {user.role === 'controller' ? 'Controller — full access to every hall' : `Invigilator — scoped to ${user.hall} only`}
         </div>
       </div>
+
+      <ExamTypeSelector />
 
       <Link
         to="/demo"

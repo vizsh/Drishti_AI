@@ -29,6 +29,11 @@ connections: list[WebSocket] = []
 session_id: int | None = None
 deployment: DeploymentConfig | None = None
 _workers_lock = asyncio.Lock()
+# Part G Tier 1 (2026-08-21): current session's exam-type weight profile —
+# applied to every worker's RiskEngine, and re-applied to any worker
+# (re)created afterward (Part F's setup-triggered restart included), so a
+# mid-session camera reconfiguration doesn't silently reset it to "mixed".
+current_exam_type: str = "mixed"
 
 
 def _worker_for_seat(seat_id: str) -> PipelineWorker | None:
@@ -64,6 +69,7 @@ def _start_workers() -> None:
             device="cuda",
             stream_frames=(i == 0),
         )
+        w.risk_engine.apply_profile(current_exam_type)
         workers.append(w)
         for seat_id in w.seat_cal.seats:
             seat_to_worker[seat_id] = w
@@ -123,6 +129,29 @@ async def get_setup_config() -> dict:
     from backend.deployment_config import DEFAULT_CONFIG_PATH
 
     return _json.loads(DEFAULT_CONFIG_PATH.read_text())
+
+
+@app.post("/api/session/exam-type")
+async def set_exam_type(body: dict) -> dict:
+    """Part G Tier 1: applies an exam-type weight profile (mcq/written/
+    mixed) to every current worker's RiskEngine in place — no restart, no
+    loss of in-progress calibration/deviation-tracking state, just a
+    change in how already-computed signals get weighted. Also remembered
+    so a later Part-F camera reconfiguration re-applies it instead of
+    silently resetting to "mixed"."""
+    global current_exam_type
+    exam_type = body.get("exam_type", "mixed")
+    if exam_type not in ("mcq", "written", "mixed"):
+        exam_type = "mixed"
+    current_exam_type = exam_type
+    for w in workers:
+        w.risk_engine.apply_profile(exam_type)
+    return {"status": "ok", "exam_type": exam_type}
+
+
+@app.get("/api/session/exam-type")
+async def get_exam_type() -> dict:
+    return {"exam_type": current_exam_type}
 
 
 async def broadcast_loop() -> None:

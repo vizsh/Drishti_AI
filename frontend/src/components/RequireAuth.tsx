@@ -6,8 +6,10 @@ import { useAuth } from '../state/AuthContext'
  * route guard, not a UI that silently does nothing. Redirects to /login and
  * remembers where the user was headed so login sends them back there. */
 export function RequireAuth({ children }: { children: ReactNode }) {
-  const { user } = useAuth()
+  const { user, sessionLoading } = useAuth()
   const location = useLocation()
+  // While silently re-authenticating (cookie rehydration), hold rendering
+  if (sessionLoading) return null
   if (!user) {
     return <Navigate to="/login" replace state={{ from: location.pathname }} />
   }

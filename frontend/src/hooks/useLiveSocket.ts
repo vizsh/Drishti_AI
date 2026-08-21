@@ -29,16 +29,27 @@ export function useLiveSocket() {
   useEffect(() => {
     let cancelled = false
     let retryTimer: number
+    let retryCount = 0
 
     function connect() {
       const proto = location.protocol === 'https:' ? 'wss' : 'ws'
       const ws = new WebSocket(`${proto}://${location.host}/ws/live`)
       wsRef.current = ws
 
-      ws.onopen = () => setConnected(true)
-      ws.onclose = () => {
+      ws.onopen = () => {
+        retryCount = 0
+        setConnected(true)
+      }
+      ws.onclose = (ev) => {
         setConnected(false)
-        if (!cancelled) retryTimer = window.setTimeout(connect, 2000)
+        // 1008 = Policy Violation (unauthorized) — stop retrying, the user
+        // needs to re-login. The auth context's 401 interceptor or session
+        // rehydration will handle the redirect.
+        if (ev.code === 1008 || cancelled) return
+        // Exponential backoff: 2s, 4s, 8s … max 30s
+        const delay = Math.min(2000 * Math.pow(2, retryCount), 30000)
+        retryCount++
+        retryTimer = window.setTimeout(connect, delay)
       }
       ws.onmessage = (msg) => {
         const ev: WsEvent = JSON.parse(msg.data)

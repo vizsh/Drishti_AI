@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import queue
 from pathlib import Path
+from typing import Annotated, Optional
 
 from fastapi import FastAPI, Request, Response, WebSocket, WebSocketDisconnect, Cookie, Depends, HTTPException, status
 from fastapi.responses import FileResponse
@@ -28,7 +29,7 @@ DEMO_ACCOUNTS = {
     "invigilator.b@kinesis.ai": {"password": "demo1234", "name": "S. Okafor", "role": "invigilator", "hall": "Hall B"},
 }
 
-async def get_current_user(kinesis_session_user: Optional[str] = Cookie(None)) -> dict:
+async def get_current_user(kinesis_session_user: Annotated[str | None, Cookie()] = None) -> dict:
     if not kinesis_session_user or kinesis_session_user not in DEMO_ACCOUNTS:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,

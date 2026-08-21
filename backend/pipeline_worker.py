@@ -362,6 +362,14 @@ class PipelineWorker(threading.Thread):
                         continue
                     seen_seats.add(seat_id)
 
+                    # Phase 1 (2026-08-21 gap fix): whether a genuine (not
+                    # calibration-issue) gesture completed for this seat this
+                    # frame — fed into risk_engine.observe() below so
+                    # risk_score/seat-card color actually reflect it, not
+                    # just the alert feed. A calibration_warning-flagged
+                    # gesture must NOT raise risk — that's the whole point
+                    # of Part 2.5 distinguishing it from a genuine incident.
+                    gesture_active = False
                     for gesture_event in self.gesture_detector.observe(seat_id, p, sim_time):
                         if gesture_event.likely_calibration_issue:
                             # Part 2.5: repeated same-direction hand-reach
@@ -379,6 +387,7 @@ class PipelineWorker(threading.Thread):
                                 }
                             )
                         else:
+                            gesture_active = True
                             self.event_queue.put(
                                 {
                                     "type": "gesture_alert",
@@ -453,6 +462,7 @@ class PipelineWorker(threading.Thread):
                         baseline_yaw_std=baseline.torso_yaw_std,
                         object_label=object_label,
                         object_confidence=object_conf,
+                        gesture_active=gesture_active,
                     )
 
                     level = "alert" if assessment.risk_score >= 0.5 else ("elevated" if assessment.risk_score >= 0.25 else "calm")

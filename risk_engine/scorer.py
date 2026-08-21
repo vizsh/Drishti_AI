@@ -60,7 +60,7 @@ class RiskAssessment:
 class RiskEngine:
     def __init__(
         self,
-        zscore_threshold: float = 2.5,
+        zscore_threshold: float = 3.5,
         min_event_duration: float = 1.5,
         pattern_window_seconds: float = 300.0,
         weight_yaw: float = 0.20,
@@ -68,7 +68,7 @@ class RiskEngine:
         weight_pattern: float = 0.25,
         weight_object: float = 0.15,
         weight_gesture: float = 0.20,
-        alert_min_duration: float = 3.5,
+        alert_min_duration: float = 8.0,
         alert_min_repeat_count: int = 2,
         alert_cap_when_uncorroborated: float = 0.45,
         exam_type: str = "mixed",

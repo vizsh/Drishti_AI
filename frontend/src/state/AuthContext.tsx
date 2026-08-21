@@ -24,8 +24,8 @@ const STORAGE_KEY = 'kinesis_auth_session'
 
 interface AuthContextValue {
   user: DemoAccount | null
-  login: (email: string, password: string) => { ok: boolean; error?: string }
-  logout: () => void
+  login: (email: string, password: string) => Promise<{ ok: boolean; error?: string }>
+  logout: () => Promise<void>
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null)
@@ -44,17 +44,32 @@ function loadStoredUser(): DemoAccount | null {
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<DemoAccount | null>(loadStoredUser)
 
-  function login(email: string, password: string) {
-    const account = DEMO_ACCOUNTS.find((a) => a.email.toLowerCase() === email.toLowerCase())
-    if (!account || account.password !== password) {
-      return { ok: false, error: 'Incorrect email or password.' }
+  async function login(email: string, password: string) {
+    try {
+      const res = await fetch('/api/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password }),
+      })
+      if (!res.ok) {
+        const errData = await res.json()
+        return { ok: false, error: errData.detail || 'Incorrect email or password.' }
+      }
+      const data = await res.json()
+      setUser(data.user)
+      localStorage.setItem(STORAGE_KEY, JSON.stringify({ email: data.user.email }))
+      return { ok: true }
+    } catch (e) {
+      return { ok: false, error: 'Failed to connect to authentication server.' }
     }
-    setUser(account)
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ email: account.email }))
-    return { ok: true }
   }
 
-  function logout() {
+  async function logout() {
+    try {
+      await fetch('/api/logout', { method: 'POST' })
+    } catch (e) {
+      // ignore logout connection error
+    }
     setUser(null)
     localStorage.removeItem(STORAGE_KEY)
   }

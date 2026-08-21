@@ -10,7 +10,7 @@ import asyncio
 import queue
 from pathlib import Path
 
-from fastapi import FastAPI, Request, Response, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, Response, WebSocket, WebSocketDisconnect, Cookie, Depends, HTTPException, status
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -21,6 +21,55 @@ from backend.report import generate_session_report_pdf
 from calibration.coverage import CameraCoverageInput, validate_coverage
 
 app = FastAPI(title="KINESIS AI")
+
+DEMO_ACCOUNTS = {
+    "controller@kinesis.ai": {"password": "demo1234", "name": "M. Chen", "role": "controller", "hall": None},
+    "invigilator.a@kinesis.ai": {"password": "demo1234", "name": "R. Fernandes", "role": "invigilator", "hall": "Hall A"},
+    "invigilator.b@kinesis.ai": {"password": "demo1234", "name": "S. Okafor", "role": "invigilator", "hall": "Hall B"},
+}
+
+async def get_current_user(kinesis_session_user: Optional[str] = Cookie(None)) -> dict:
+    if not kinesis_session_user or kinesis_session_user not in DEMO_ACCOUNTS:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Not authenticated",
+        )
+    return DEMO_ACCOUNTS[kinesis_session_user]
+
+@app.post("/api/login")
+async def api_login(body: dict, response: Response) -> dict:
+    email = body.get("email", "").strip().lower()
+    password = body.get("password", "")
+    account = DEMO_ACCOUNTS.get(email)
+    if not account or account["password"] != password:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect email or password."
+        )
+    # Set secure HttpOnly session cookie
+    response.set_cookie(
+        key="kinesis_session_user",
+        value=email,
+        httponly=True,
+        max_age=86400,
+        samesite="lax",
+        secure=False
+    )
+    return {
+        "status": "ok",
+        "user": {
+            "email": email,
+            "name": account["name"],
+            "role": account["role"],
+            "hall": account["hall"],
+            "initials": "".join([part[0] for part in account["name"].split() if part])
+        }
+    }
+
+@app.post("/api/logout")
+async def api_logout(response: Response) -> dict:
+    response.delete_cookie(key="kinesis_session_user")
+    return {"status": "ok"}
 
 event_queue: "queue.Queue" = queue.Queue()
 workers: list[PipelineWorker] = []
@@ -97,7 +146,7 @@ async def shutdown() -> None:
 
 
 @app.post("/api/setup/cameras")
-async def setup_hall_cameras(body: dict) -> dict:
+async def setup_hall_cameras(body: dict, user: dict = Depends(get_current_user)) -> dict:
     """Part F: multi-camera lab setup flow — saves this hall's camera list
     (RTSP/video sources, homography points, seat assignments) into
     config/deployment.json (backend/deployment_config.py's
@@ -120,7 +169,7 @@ async def setup_hall_cameras(body: dict) -> dict:
 
 
 @app.get("/api/setup/config")
-async def get_setup_config() -> dict:
+async def get_setup_config(user: dict = Depends(get_current_user)) -> dict:
     """Part F: current raw deployment.json content, for the setup UI to
     show what's already configured (existing halls/cameras) before adding
     or editing more."""
@@ -132,7 +181,7 @@ async def get_setup_config() -> dict:
 
 
 @app.post("/api/session/exam-type")
-async def set_exam_type(body: dict) -> dict:
+async def set_exam_type(body: dict, user: dict = Depends(get_current_user)) -> dict:
     """Part G Tier 1: applies an exam-type weight profile (mcq/written/
     mixed) to every current worker's RiskEngine in place — no restart, no
     loss of in-progress calibration/deviation-tracking state, just a
@@ -150,7 +199,7 @@ async def set_exam_type(body: dict) -> dict:
 
 
 @app.get("/api/session/exam-type")
-async def get_exam_type() -> dict:
+async def get_exam_type(user: dict = Depends(get_current_user)) -> dict:
     return {"exam_type": current_exam_type}
 
 
@@ -183,6 +232,11 @@ async def broadcast_loop() -> None:
 
 @app.websocket("/ws/live")
 async def ws_live(websocket: WebSocket) -> None:
+    session_user = websocket.cookies.get("kinesis_session_user")
+    if not session_user or session_user not in DEMO_ACCOUNTS:
+        await websocket.accept()
+        await websocket.close(code=1008)
+        return
     await websocket.accept()
     connections.append(websocket)
     try:
@@ -194,12 +248,12 @@ async def ws_live(websocket: WebSocket) -> None:
 
 
 @app.get("/api/seats")
-async def get_seats() -> dict:
+async def get_seats(user: dict = Depends(get_current_user)) -> dict:
     return {"seats": sorted(seat_to_worker.keys())}
 
 
 @app.get("/api/cameras")
-async def get_cameras() -> dict:
+async def get_cameras(user: dict = Depends(get_current_user)) -> dict:
     """Configured cameras, for the /live multi-camera grid — driven by
     config/deployment.json, not a hardcoded frontend count. Only the
     primary camera streams a live JPEG feed (WebSocket "frame" events);
@@ -225,7 +279,7 @@ async def get_cameras() -> dict:
 
 
 @app.post("/api/alerts/{seat_id}/dismiss")
-async def dismiss_alert(seat_id: str, body: dict | None = None) -> dict:
+async def dismiss_alert(seat_id: str, body: dict | None = None, user: dict = Depends(get_current_user)) -> dict:
     """Phase 4: extends the original dismiss-as-false-positive endpoint with
     a resolution taxonomy (false_alarm/confirmed/no_action) instead of a
     second, disconnected mechanism — same worker method, same feedback-loop
@@ -241,7 +295,7 @@ async def dismiss_alert(seat_id: str, body: dict | None = None) -> dict:
 
 
 @app.post("/api/alerts/{seat_id}/acknowledge")
-async def acknowledge_alert(seat_id: str, body: dict) -> dict:
+async def acknowledge_alert(seat_id: str, body: dict, user: dict = Depends(get_current_user)) -> dict:
     """Part 6: lightweight "seen, noted" action distinct from dispatch/
     resolve - for a minor item that doesn't need the full workflow. Logged
     for the audit trail; doesn't touch calibration."""
@@ -253,7 +307,7 @@ async def acknowledge_alert(seat_id: str, body: dict) -> dict:
 
 
 @app.post("/api/alerts/{seat_id}/dispatch")
-async def dispatch_invigilator(seat_id: str, body: dict) -> dict:
+async def dispatch_invigilator(seat_id: str, body: dict, user: dict = Depends(get_current_user)) -> dict:
     """Phase 4: "Dispatch Invigilator" action in the investigation view —
     auto-filled invigilator name from the logged-in user, timestamp logged
     server-side (created_at on the persisted event)."""
@@ -271,6 +325,7 @@ async def get_events(
     search: str | None = None,
     limit: int = 200,
     all_sessions: bool = False,
+    user: dict = Depends(get_current_user),
 ) -> dict:
     """PS #1 objective: "event logs for invigilator review" — persisted,
     filterable, survives a page refresh or server restart (unlike the
@@ -281,7 +336,7 @@ async def get_events(
 
 
 @app.get("/api/analytics")
-async def get_analytics(all_sessions: bool = False, seat_ids: str | None = None) -> dict:
+async def get_analytics(all_sessions: bool = False, seat_ids: str | None = None, user: dict = Depends(get_current_user)) -> dict:
     """PS #1 objective: "behavioral analytics ... for invigilator review".
     seat_ids: optional comma-separated hall-scoping filter so an
     Invigilator's stat strip reflects only their assigned hall."""
@@ -291,7 +346,7 @@ async def get_analytics(all_sessions: bool = False, seat_ids: str | None = None)
 
 
 @app.get("/api/report")
-async def get_session_report(seat_ids: str | None = None) -> Response:
+async def get_session_report(seat_ids: str | None = None, user: dict = Depends(get_current_user)) -> Response:
     """Phase 6: "Export Session Report" - pulls real session data (analytics
     summary, full alert log with best-effort resolution correlation,
     dispatch/resolution log) at export time, not a cached/static file.
@@ -308,7 +363,7 @@ async def get_session_report(seat_ids: str | None = None) -> Response:
 
 
 @app.get("/api/seats/{seat_id}/baseline")
-async def get_seat_baseline(seat_id: str) -> dict:
+async def get_seat_baseline(seat_id: str, user: dict = Depends(get_current_user)) -> dict:
     """Part 2.6: personal-baseline numbers for the Digital Twin view — this
     seat's own settling-window mean/std, not a flat threshold, since that's
     the system's core differentiator the view exists to demonstrate."""
@@ -318,7 +373,7 @@ async def get_seat_baseline(seat_id: str) -> dict:
 
 
 @app.get("/api/calibration-quality")
-async def get_calibration_quality() -> dict:
+async def get_calibration_quality(user: dict = Depends(get_current_user)) -> dict:
     """Part 2.5: live per-camera seat-anchor hit-rate, alongside the static
     /api/coverage geometric check. "gathering" until enough samples exist to
     judge, "needs_attention" below the low-confidence threshold, else
@@ -328,7 +383,7 @@ async def get_calibration_quality() -> dict:
 
 
 @app.get("/api/coverage")
-async def get_coverage() -> dict:
+async def get_coverage(user: dict = Depends(get_current_user)) -> dict:
     """Pre-exam camera blind-spot check (docs/architecture.md §13,
     differentiator #10) — run before an exam starts, not discovered mid-exam
     when a student in a blind spot goes unmonitored. Checks every camera in
@@ -352,7 +407,7 @@ async def get_coverage() -> dict:
 
 
 @app.get("/api/heatmap")
-async def get_heatmap() -> Response:
+async def get_heatmap(user: dict = Depends(get_current_user)) -> Response:
     """Session-wide motion heatmap (perception/motion_heatmap.py) — a
     PS #2-style output ("motion heatmaps") computed as a free byproduct of
     frames PS #1's live pipeline already decodes, not a separate offline
@@ -369,7 +424,7 @@ async def get_heatmap() -> Response:
 
 
 @app.get("/api/evidence-access-log")
-async def get_evidence_access_log(clip_id: str | None = None, limit: int = 200) -> dict:
+async def get_evidence_access_log(clip_id: str | None = None, limit: int = 200, user: dict = Depends(get_current_user)) -> dict:
     """PS risk table row "Privacy Concerns" — who viewed which evidence
     clip, when. Read side of the audit trail written by
     get_evidence_manifest below."""
@@ -396,7 +451,7 @@ _evidence_dir.mkdir(parents=True, exist_ok=True)
 
 
 @app.get("/evidence/{clip_id}/manifest.json")
-async def get_evidence_manifest(clip_id: str, request: Request) -> FileResponse:
+async def get_evidence_manifest(clip_id: str, request: Request, user: dict = Depends(get_current_user)) -> FileResponse:
     """Explicit route ahead of the /evidence static mount below, so every
     clip *open* (fetching its manifest is the dashboard's entry point for
     viewing one) is logged with the viewer's address — audit logging the
@@ -410,8 +465,20 @@ async def get_evidence_manifest(clip_id: str, request: Request) -> FileResponse:
     return FileResponse(manifest_path, media_type="application/json")
 
 
+@app.get("/evidence/{clip_id}/{filename}")
+async def get_evidence_file(clip_id: str, filename: str, user: dict = Depends(get_current_user)) -> FileResponse:
+    """Secure serving of individual frames/images inside the evidence folders.
+    Enforces authentication and prevents directory traversal attacks."""
+    safe_clip_id = Path(clip_id).name
+    safe_filename = Path(filename).name
+    file_path = _evidence_dir / safe_clip_id / safe_filename
+    if not file_path.exists() or not file_path.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+    media_type = "image/jpeg" if filename.endswith((".jpg", ".jpeg")) else "application/octet-stream"
+    return FileResponse(file_path, media_type=media_type)
+
+
 app.mount("/dashboard-classic", StaticFiles(directory=_classic_dashboard, html=True), name="dashboard-classic")
-app.mount("/evidence", StaticFiles(directory=_evidence_dir), name="evidence")
 if (_frontend_dist / "assets").exists():
     app.mount("/assets", StaticFiles(directory=_frontend_dist / "assets"), name="frontend-assets")
 

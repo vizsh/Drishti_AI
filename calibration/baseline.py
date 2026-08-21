@@ -72,13 +72,14 @@ class SeatBaseline:
     torso_yaw_std: float
     motion_mean: float
     motion_std: float
-    min_std: float = 1e-3  # floor so a perfectly still calibration window doesn't divide by zero
+    min_std_yaw: float = 0.05       # 0.05 floor ensures head turns under ~5 deg are not flagged as anomalous
+    min_std_motion: float = 0.05    # 0.05 floor filters out minor breathing and micro-fidgets
 
     def yaw_zscore(self, value: float) -> float:
-        return (value - self.torso_yaw_mean) / max(self.torso_yaw_std, self.min_std)
+        return (value - self.torso_yaw_mean) / max(self.torso_yaw_std, self.min_std_yaw)
 
     def motion_zscore(self, value: float) -> float:
-        return (value - self.motion_mean) / max(self.motion_std, self.min_std)
+        return (value - self.motion_mean) / max(self.motion_std, self.min_std_motion)
 
 
 class BaselineCalibrator:

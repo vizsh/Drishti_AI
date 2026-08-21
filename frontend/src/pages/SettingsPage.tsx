@@ -1,10 +1,13 @@
 import { Link } from 'react-router-dom'
-import { Settings as SettingsIcon, ShieldCheck, ChevronRight, PlayCircle, Camera } from 'lucide-react'
+import { useState } from 'react'
+import { Settings as SettingsIcon, ShieldCheck, ChevronRight, PlayCircle, Camera, Volume2, VolumeX } from 'lucide-react'
 import { useAuth, DEMO_ACCOUNTS } from '../state/AuthContext'
 import { ExamTypeSelector } from '../components/ExamTypeSelector'
+import { setAudioMuted, isAudioMuted } from '../lib/audio'
 
 export function SettingsPage() {
   const { user } = useAuth()
+  const [muted, setMuted] = useState(isAudioMuted())
   if (!user) return null
 
   return (
@@ -32,6 +35,22 @@ export function SettingsPage() {
       </div>
 
       <ExamTypeSelector />
+
+      <div className="rounded-2xl border border-white/8 p-5 mb-5 max-w-lg bg-white/3">
+        <h2 className="text-sm font-bold uppercase tracking-wide mb-3">Audio Alerts</h2>
+        <p className="text-xs text-white/50 mb-3">Critical alerts play an audio ping so walking invigilators are notified without watching the screen.</p>
+        <button
+          onClick={() => { const next = !muted; setMuted(next); setAudioMuted(next) }}
+          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl border text-sm transition-colors ${
+            muted
+              ? 'border-white/12 text-white/50 hover:border-white/25'
+              : 'border-calm/30 text-calm bg-calm/8'
+          }`}
+        >
+          {muted ? <VolumeX size={16} /> : <Volume2 size={16} />}
+          {muted ? 'Audio muted — click to enable' : 'Audio alerts enabled'}
+        </button>
+      </div>
 
       <Link
         to="/demo"

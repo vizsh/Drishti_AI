@@ -1,10 +1,22 @@
 import { useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { UserRoundSearch } from 'lucide-react'
+import { UserRoundSearch, Volume2 } from 'lucide-react'
 import type { SeatState } from '../types'
 import { STATUS_COLOR, riskLevel } from '../lib/colors'
+import { humanizeRisk, humanizeCalibration, humanizeYaw } from '../lib/humanize'
 import { EmptyState } from './EmptyState'
 
+/**
+ * Product redesign (2026-08-21): seat cards are now "glance-only" tiles.
+ * No z-scores, no raw confidence %. Just:
+ *   - Seat label
+ *   - Human-readable status ("All clear" / "Elevated activity" / "Verification required")
+ *   - A subtle behavior hint ("Facing forward" / "Glancing right")
+ *   - Color-coded risk bar
+ *   - Pulse animation during calibration instead of a raw progress number
+ *
+ * Technical details live behind the click on /seat/:seatId.
+ */
 export function SeatGrid({ seats }: { seats: Record<string, SeatState> }) {
   const ids = Object.keys(seats).sort()
   if (ids.length === 0) {
@@ -25,17 +37,15 @@ export function SeatGrid({ seats }: { seats: Record<string, SeatState> }) {
   )
 }
 
-/**
- * Glance-only card (Problem 1): seat label, status badge, risk bar. That's
- * it — no yaw_z, no confidence %, no fused-camera string. Everything that
- * used to render inline here now lives behind the click, on /seat/:seatId.
- */
 function SeatCard({ id, seat }: { id: string; seat: SeatState }) {
   const navigate = useNavigate()
   const level = seat.calibrated ? riskLevel(seat.risk) : null
   const color = level ? STATUS_COLOR[level] : '#8b8578'
   const pct = seat.calibrated ? Math.min(100, seat.risk * 100) : (seat.progress ?? 0) * 100
-  const badgeLabel = level ?? 'calibrating'
+
+  // Human-readable labels instead of raw numbers
+  const statusLabel = seat.calibrated ? humanizeRisk(seat.risk) : humanizeCalibration(seat.progress ?? 0)
+  const behaviorHint = seat.calibrated ? humanizeYaw(seat.yawZ) : null
 
   return (
     <motion.button
@@ -48,6 +58,7 @@ function SeatCard({ id, seat }: { id: string; seat: SeatState }) {
       className="rounded-2xl p-4 border text-left cursor-pointer relative overflow-hidden"
       style={{ borderColor: `${color}40` }}
     >
+      {/* Critical pulse glow */}
       {level === 'critical' && (
         <motion.div
           className="absolute inset-0 pointer-events-none"
@@ -55,12 +66,36 @@ function SeatCard({ id, seat }: { id: string; seat: SeatState }) {
           transition={{ duration: 1.8, repeat: Infinity }}
         />
       )}
-      <div className="flex items-center justify-between mb-3">
+
+      {/* Calibrating pulse */}
+      {!seat.calibrated && (
+        <motion.div
+          className="absolute inset-0 pointer-events-none"
+          animate={{ opacity: [0.03, 0.08, 0.03] }}
+          transition={{ duration: 2.5, repeat: Infinity, ease: 'easeInOut' }}
+          style={{ background: '#8b8578' }}
+        />
+      )}
+
+      {/* Header row */}
+      <div className="flex items-center justify-between mb-2">
         <span className="font-bold text-sm">{id.replace('_', ' ').toUpperCase()}</span>
-        <span className="text-[10px] mono uppercase px-2 py-0.5 rounded-full" style={{ background: `${color}22`, color }}>
-          {badgeLabel}
-        </span>
+        {level === 'critical' && (
+          <Volume2 size={12} className="text-critical animate-pulse" />
+        )}
       </div>
+
+      {/* Status label — human readable */}
+      <p className="text-xs mb-1" style={{ color }}>
+        {statusLabel}
+      </p>
+
+      {/* Behavior hint — only when calibrated */}
+      {behaviorHint && (
+        <p className="text-[10px] mono text-white/35 mb-2">{behaviorHint}</p>
+      )}
+
+      {/* Risk bar */}
       <div className="w-full h-1.5 rounded-full bg-white/6 overflow-hidden">
         <motion.div
           className="h-full rounded-full"

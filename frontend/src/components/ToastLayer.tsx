@@ -5,6 +5,8 @@ import { AlertTriangle, Hand, Radar, X } from 'lucide-react'
 import { useLive } from '../state/LiveContext'
 import { useHallScope } from '../state/useHallScope'
 import { Badge } from './Badge'
+import { shortAlertSummary } from '../lib/shortSummary'
+import { playCriticalAlert, playWatchAlert } from '../lib/audio'
 import type { AlertItem } from '../types'
 
 const AUTO_DISMISS_MS = 7000
@@ -43,6 +45,11 @@ export function ToastLayer() {
     fresh.forEach((a) => {
       setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== a.id)), AUTO_DISMISS_MS)
     })
+    // Audio alerts for walking invigilators (frontend analysis §2)
+    const hasCritical = fresh.some((a) => a.kind === 'alert')
+    const hasWatch = fresh.some((a) => a.kind === 'gesture' || a.kind === 'calibration_warning')
+    if (hasCritical) playCriticalAlert()
+    else if (hasWatch) playWatchAlert()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [alerts])
 
@@ -77,7 +84,7 @@ export function ToastLayer() {
                     <span className="text-xs font-bold">{t.seatId.toUpperCase()}</span>
                     <Badge tone={t.kind === 'alert' ? 'critical' : t.kind === 'calibration_warning' ? 'watch' : 'neutral'}>{style.label}</Badge>
                   </div>
-                  <p className="text-[11px] text-white/70 leading-snug line-clamp-2">{t.explanation}</p>
+                  <p className="text-[11px] text-white/70 leading-snug line-clamp-2">{shortAlertSummary(t.explanation)}</p>
                 </div>
                 <button
                   onClick={(e) => {

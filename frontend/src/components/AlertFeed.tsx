@@ -19,11 +19,12 @@ interface Props {
   onDispatch?: (seatId: string, invigilator: string) => Promise<void>
   onAcknowledge?: (seatId: string, invigilator: string) => Promise<void>
   onViewEvidence: (url: string) => void
+  onAlertClick?: (alert: AlertItem) => void
   limit?: number
   showViewAllLink?: boolean
 }
 
-export function AlertFeed({ alerts, feedback, seatIds, onDismiss, onDispatch, onAcknowledge, onViewEvidence, limit, showViewAllLink }: Props) {
+export function AlertFeed({ alerts, feedback, seatIds, onDismiss, onDispatch, onAcknowledge, onViewEvidence, onAlertClick, limit, showViewAllLink }: Props) {
   const [resolved, setResolved] = useState<Map<string, Resolution>>(new Map())
   const [dispatched, setDispatched] = useState<Map<string, string>>(new Map())
   const [acknowledged, setAcknowledged] = useState<Map<string, string>>(new Map())
@@ -80,6 +81,7 @@ export function AlertFeed({ alerts, feedback, seatIds, onDismiss, onDispatch, on
               onDispatch={handleDispatch}
               onAcknowledge={handleAcknowledge}
               onViewEvidence={onViewEvidence}
+              onAlertClick={onAlertClick}
             />
           ))}
         </AnimatePresence>
@@ -98,6 +100,7 @@ function AlertCard({
   onDispatch,
   onAcknowledge,
   onViewEvidence,
+  onAlertClick,
 }: {
   item: AlertItem
   seatIds: string[]
@@ -108,6 +111,7 @@ function AlertCard({
   onDispatch: (item: AlertItem, invigilator: string) => void
   onAcknowledge: (item: AlertItem, invigilator: string) => void
   onViewEvidence: (url: string) => void
+  onAlertClick?: (alert: AlertItem) => void
 }) {
   const { user } = useAuth()
   const [expanded, setExpanded] = useState(false)
@@ -134,8 +138,9 @@ function AlertCard({
       initial={{ opacity: 0, y: -8 }}
       animate={{ opacity: 1, y: 0 }}
       exit={{ opacity: 0 }}
-      className="rounded-xl p-3 border"
+      className={`rounded-xl p-3 border ${onAlertClick ? 'cursor-pointer hover:border-white/25 transition-colors' : ''}`}
       style={{ borderColor, background: bgColor }}
+      onClick={onAlertClick ? () => onAlertClick(item) : undefined}
     >
       <div className="flex items-center justify-between mb-1">
         <span className="text-xs font-bold" style={{ color: seatColor(item.seatId, seatIds) }}>

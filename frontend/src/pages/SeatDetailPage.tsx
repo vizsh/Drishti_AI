@@ -1,13 +1,16 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { useParams, Link } from 'react-router-dom'
-import { ArrowLeft, Link2, Eye, Fingerprint, UserRoundSearch } from 'lucide-react'
+import { ArrowLeft, Link2, Fingerprint, UserRoundSearch, Activity, Compass, Shield, Camera } from 'lucide-react'
 import { RiskTrendChart } from '../components/RiskTrendChart'
 import { AlertFeed } from '../components/AlertFeed'
 import { EvidenceModal } from '../components/EvidenceModal'
+import { ActionDrawer } from '../components/ActionDrawer'
 import { EmptyState } from '../components/EmptyState'
 import { useLive } from '../state/LiveContext'
 import { useHallScope } from '../state/useHallScope'
 import { STATUS_COLOR, riskLevel } from '../lib/colors'
+import { humanizeYaw, humanizeMotion, humanizeRisk, humanizeConfidence } from '../lib/humanize'
+import type { AlertItem } from '../types'
 
 interface EventRow {
   id: number
@@ -23,6 +26,7 @@ export function SeatDetailPage() {
   const { isSeatInScope } = useHallScope()
   const [evidenceUrl, setEvidenceUrl] = useState<string | null>(null)
   const [history, setHistory] = useState<EventRow[]>([])
+  const [drawerAlert, setDrawerAlert] = useState<AlertItem | null>(null)
 
   useEffect(() => {
     if (!seatId) return
@@ -49,6 +53,11 @@ export function SeatDetailPage() {
   const seat = seats[seatId]
   const seatAlerts = alerts.filter((a) => a.seatId === seatId)
   const seatRiskHistory = riskHistory[seatId] ? { [seatId]: riskHistory[seatId] } : {}
+
+  // Open the Action Drawer when an alert is clicked in the feed
+  const handleAlertClick = (alert: AlertItem) => {
+    setDrawerAlert(alert)
+  }
 
   return (
     <div>
@@ -77,23 +86,55 @@ export function SeatDetailPage() {
             </Link>
           </div>
 
-          {/* Everything that used to always render on the overview card now lives here */}
+          {/* Human-readable metrics — no raw z-scores in primary view */}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
-            <Metric label="risk score" value={seat.calibrated ? seat.risk.toFixed(2) : '—'} />
-            <Metric label="yaw_z" value={seat.yawZ != null ? seat.yawZ.toFixed(2) : '—'} />
-            <Metric
-              label="detection confidence"
-              value={seat.confidence != null ? `${(seat.confidence * 100).toFixed(0)}%` : '—'}
-              icon={<Eye size={12} />}
-              warn={seat.confidence != null && seat.confidence < 0.4}
+            <MetricCard
+              icon={<Shield size={14} />}
+              label="Status"
+              value={seat.calibrated ? humanizeRisk(seat.risk) : 'Calibrating'}
+              color={seat.calibrated ? STATUS_COLOR[riskLevel(seat.risk)] : '#8b8578'}
             />
-            <Metric
-              label="camera source"
-              value={seat.cameras && seat.cameras.length > 0 ? seat.cameras.join(' + ') : '—'}
-              icon={seat.cameras.length > 1 ? <Link2 size={12} /> : undefined}
-              small
+            <MetricCard
+              icon={<Compass size={14} />}
+              label="Orientation"
+              value={humanizeYaw(seat.yawZ)}
+            />
+            <MetricCard
+              icon={<Activity size={14} />}
+              label="Movement"
+              value={humanizeMotion(seat.motionZ)}
+            />
+            <MetricCard
+              icon={<Camera size={14} />}
+              label="Detection quality"
+              value={humanizeConfidence(seat.confidence).label}
+              warn={humanizeConfidence(seat.confidence).warn}
+              sublabel={seat.cameras && seat.cameras.length > 1
+                ? `${seat.cameras.length} cameras fused`
+                : undefined
+              }
             />
           </div>
+
+          {/* Technical details collapsed by default — for advanced users */}
+          <details className="mb-6">
+            <summary className="text-[10px] mono text-white/25 cursor-pointer hover:text-white/40 uppercase tracking-wider">
+              Show technical telemetry
+            </summary>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mt-3">
+              <RawMetric label="risk score" value={seat.calibrated ? seat.risk.toFixed(3) : '—'} />
+              <RawMetric label="yaw_z" value={seat.yawZ != null ? seat.yawZ.toFixed(2) : '—'} />
+              <RawMetric label="motion_z" value={seat.motionZ != null ? (seat.motionZ as number).toFixed(2) : '—'} />
+              <RawMetric
+                label="confidence"
+                value={seat.confidence != null ? `${(seat.confidence * 100).toFixed(0)}%` : '—'}
+              />
+              <RawMetric
+                label="camera source"
+                value={seat.cameras && seat.cameras.length > 0 ? seat.cameras.join(' + ') : '—'}
+              />
+            </div>
+          </details>
 
           <h2 className="text-sm font-bold uppercase tracking-wide mb-3">Risk trend — this seat, last 60s</h2>
           <div className="rounded-2xl border border-white/8 p-4 mb-6">
@@ -109,6 +150,7 @@ export function SeatDetailPage() {
               onDispatch={dispatchInvigilator}
               onAcknowledge={acknowledgeAlert}
               onViewEvidence={setEvidenceUrl}
+              onAlertClick={handleAlertClick}
             />
             <div>
               <h2 className="text-sm font-bold uppercase tracking-wide mb-3">Full history — this seat</h2>
@@ -132,6 +174,14 @@ export function SeatDetailPage() {
         </>
       )}
       <EvidenceModal url={evidenceUrl} onClose={() => setEvidenceUrl(null)} />
+      <ActionDrawer
+        alert={drawerAlert}
+        onClose={() => setDrawerAlert(null)}
+        onDismiss={dismissAlert}
+        onDispatch={dispatchInvigilator}
+        onAcknowledge={acknowledgeAlert}
+        onViewEvidence={setEvidenceUrl}
+      />
     </div>
   )
 }
@@ -139,18 +189,47 @@ export function SeatDetailPage() {
 function StatusBadge({ seat }: { seat: { calibrated: boolean; risk: number } }) {
   const level = seat.calibrated ? riskLevel(seat.risk) : null
   const color = level ? STATUS_COLOR[level] : '#8b8578'
+  const label = seat.calibrated ? humanizeRisk(seat.risk) : 'Calibrating'
   return (
     <span className="text-xs mono uppercase px-3 py-1 rounded-full" style={{ background: `${color}22`, color }}>
-      {seat.calibrated ? level : 'calibrating'}
+      {label}
     </span>
   )
 }
 
-function Metric({ label, value, icon, warn, small }: { label: string; value: string; icon?: ReactNode; warn?: boolean; small?: boolean }) {
+/** Human-readable metric card with icon */
+function MetricCard({ icon, label, value, color, warn, sublabel }: {
+  icon: ReactNode
+  label: string
+  value: string
+  color?: string
+  warn?: boolean
+  sublabel?: string
+}) {
   return (
     <div className="rounded-2xl border border-white/8 px-4 py-3">
-      <div className="text-[10px] mono uppercase tracking-widest text-white/35 mb-1 flex items-center gap-1">{icon}{label}</div>
-      <div className={small ? 'text-xs mono text-white/70' : 'text-xl font-bold'} style={{ color: warn ? '#ffb648' : undefined }}>{value}</div>
+      <div className="text-[10px] mono uppercase tracking-widest text-white/35 mb-1.5 flex items-center gap-1.5">
+        {icon}
+        {label}
+      </div>
+      <div className="text-base font-semibold" style={{ color: warn ? '#ffb648' : color }}>
+        {value}
+      </div>
+      {sublabel && (
+        <div className="text-[10px] mono text-white/30 mt-0.5 flex items-center gap-1">
+          <Link2 size={10} /> {sublabel}
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** Raw technical metric — only shown in collapsed "technical telemetry" section */
+function RawMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="rounded-xl border border-white/6 px-3 py-2">
+      <div className="text-[9px] mono uppercase tracking-widest text-white/25 mb-0.5">{label}</div>
+      <div className="text-xs mono text-white/50">{value}</div>
     </div>
   )
 }

@@ -30,6 +30,7 @@ from ingestion.video_source import VideoSource
 from perception.lighting import enhance_if_dark
 from perception.motion_heatmap import MotionHeatmapAccumulator
 from perception.object_detector import ObjectDetector
+from perception.roi_contraband import detect_in_roi, workspace_roi
 from perception.pose import LEFT_SHOULDER, RIGHT_SHOULDER, PoseEstimator
 from risk_engine.scorer import RiskEngine
 
@@ -341,10 +342,21 @@ class PipelineWorker(threading.Thread):
                 self.frame_buffer.add(sim_time, frame.image, [b for b in head_bboxes if b is not None], seat_poses)
 
                 # Object detection (docs/architecture.md §4) runs on its own,
-                # slower cadence — a separate model pass, not free.
-                object_detections = []
+                # slower cadence — a separate model pass, not free. Phase 2b
+                # (2026-08-21): cropped to each tracked person's workspace
+                # region (shoulders/elbows/wrists) rather than the full
+                # frame — measured on real footage to cut phone_detector_v1's
+                # documented false-positive rate (docs/build_order.md: fired
+                # on a static chair) from 100% to 61% of frames. Not a full
+                # fix (some desks/partitions still trigger within a
+                # student's own crop), so this stays tagged "experimental"
+                # in the UI exactly as before, just measurably better.
+                object_detections: list = []
                 if self._frame_counter % self.object_detect_every_n_frames == 0:
-                    object_detections = self.object_detector.detect(detect_input)
+                    for p in poses:
+                        roi = workspace_roi(p, self.image_width, self.image_height)
+                        if roi is not None:
+                            object_detections.extend(detect_in_roi(self.object_detector, detect_input, roi))
 
                 vis = (
                     frame.image

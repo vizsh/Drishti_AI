@@ -90,6 +90,27 @@ def _build_calibration(cam: dict) -> SeatCalibration:
     return cal
 
 
+def save_hall_cameras(hall: str, cameras: list[dict], path: Path = DEFAULT_CONFIG_PATH) -> None:
+    """Part F (multi-camera lab setup, 2026-08-21): merges a hall's camera
+    list into config/deployment.json — replaces any existing cameras
+    already assigned to this hall, leaves every other hall's cameras
+    untouched. Each dict in `cameras` must match the same schema
+    load_deployment_config() reads (camera_id, video_path, image_width/
+    height, image_points, plane_points, seats, ...). Newly-referenced seat
+    ids are appended to expected_seats so the coverage check picks them up.
+    """
+    data = json.loads(path.read_text())
+    halls = data.setdefault("halls", {})
+    other_halls_cameras = [c for c in data["cameras"] if halls.get(c["camera_id"]) != hall]
+    data["cameras"] = other_halls_cameras + cameras
+    for cam in cameras:
+        halls[cam["camera_id"]] = hall
+        for seat_id in cam["seats"]:
+            if seat_id not in data["expected_seats"]:
+                data["expected_seats"].append(seat_id)
+    path.write_text(json.dumps(data, indent=2))
+
+
 def load_deployment_config(path: Path = DEFAULT_CONFIG_PATH) -> DeploymentConfig:
     data = json.loads(path.read_text())
     halls = data.get("halls", {})

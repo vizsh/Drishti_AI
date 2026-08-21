@@ -14,6 +14,7 @@ import { EvidenceVaultPage } from './pages/EvidenceVaultPage'
 import { SettingsPage } from './pages/SettingsPage'
 import { TrustCompliancePage } from './pages/TrustCompliancePage'
 import { DemoModePage } from './pages/DemoModePage'
+import { LabSetupPage } from './pages/LabSetupPage'
 
 function DemoModeRoute() {
   const navigate = useNavigate()
@@ -53,6 +54,7 @@ export default function App() {
               <Route path="/analytics" element={<AnalyticsPage />} />
               <Route path="/settings" element={<SettingsPage />} />
               <Route path="/trust" element={<TrustCompliancePage />} />
+              <Route path="/lab-setup" element={<LabSetupPage />} />
               <Route path="*" element={<Navigate to="/command-center" replace />} />
             </Route>
           </Routes>

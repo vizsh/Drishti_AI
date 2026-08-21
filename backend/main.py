@@ -15,7 +15,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from backend import db
-from backend.deployment_config import DeploymentConfig, load_deployment_config
+from backend.deployment_config import DeploymentConfig, load_deployment_config, save_hall_cameras
 from backend.pipeline_worker import PipelineWorker
 from backend.report import generate_session_report_pdf
 from calibration.coverage import CameraCoverageInput, validate_coverage
@@ -28,28 +28,31 @@ seat_to_worker: dict[str, PipelineWorker] = {}
 connections: list[WebSocket] = []
 session_id: int | None = None
 deployment: DeploymentConfig | None = None
+_workers_lock = asyncio.Lock()
 
 
 def _worker_for_seat(seat_id: str) -> PipelineWorker | None:
     return seat_to_worker.get(seat_id)
 
 
-@app.on_event("startup")
-async def startup() -> None:
-    global workers, seat_to_worker, session_id, deployment
-    deployment = load_deployment_config()
-    db.init_db()
-    session_id = db.create_session(deployment.primary_camera.video_path)
+def _start_workers() -> None:
+    """One independent PipelineWorker per group of cameras that actually
+    share seats (backend/deployment_config.py's worker_groups()) — a
+    camera with zero seat overlap with anything else is structurally
+    invisible to a single global worker's scoring loop (the Hall B bug:
+    seat_7-10 never scored because they shared no seats with the Hall A
+    primary). All workers share one event_queue/broadcast_loop. Only the
+    group containing the deployment's original primary camera streams
+    live JPEG frames — PS performance note: never decode more than one
+    tile's frames for live-feed display at a time.
 
-    # One independent PipelineWorker per group of cameras that actually
-    # share seats (backend/deployment_config.py's worker_groups()) — a
-    # camera with zero seat overlap with anything else is structurally
-    # invisible to a single global worker's scoring loop (the Hall B bug:
-    # seat_7-10 never scored because they shared no seats with the Hall A
-    # primary). All workers share one event_queue/broadcast_loop. Only the
-    # group containing the deployment's original primary camera streams
-    # live JPEG frames — PS performance note: never decode more than one
-    # tile's frames for live-feed display at a time.
+    Factored out of startup() (Part F, 2026-08-21) so the lab-setup flow
+    can call this again after writing a new camera config, without
+    restarting the whole app — same logic either way, not a second path."""
+    global workers, seat_to_worker
+    assert deployment is not None
+    workers = []
+    seat_to_worker = {}
     groups = deployment.worker_groups()
     for i, (primary, secondaries) in enumerate(groups):
         w = PipelineWorker(
@@ -66,13 +69,60 @@ async def startup() -> None:
             seat_to_worker[seat_id] = w
         w.start()
 
+
+def _stop_workers() -> None:
+    for w in workers:
+        w.stop()
+
+
+@app.on_event("startup")
+async def startup() -> None:
+    global session_id, deployment
+    deployment = load_deployment_config()
+    db.init_db()
+    session_id = db.create_session(deployment.primary_camera.video_path)
+    _start_workers()
     asyncio.create_task(broadcast_loop())
 
 
 @app.on_event("shutdown")
 async def shutdown() -> None:
-    for w in workers:
-        w.stop()
+    _stop_workers()
+
+
+@app.post("/api/setup/cameras")
+async def setup_hall_cameras(body: dict) -> dict:
+    """Part F: multi-camera lab setup flow — saves this hall's camera list
+    (RTSP/video sources, homography points, seat assignments) into
+    config/deployment.json (backend/deployment_config.py's
+    save_hall_cameras(), replacing only this hall's previous cameras), then
+    reloads the config and restarts every worker against it. Two or more
+    cameras assigned overlapping seats automatically become a fusion
+    primary/secondary pair via the SAME worker_groups() grouping every
+    other camera goes through — no separate fusion-wiring step, this *is*
+    the wiring. Locked so a second setup call can't race a restart already
+    in progress."""
+    global deployment
+    hall = body.get("hall", "Hall A")
+    cameras = body.get("cameras", [])
+    async with _workers_lock:
+        await asyncio.to_thread(save_hall_cameras, hall, cameras)
+        _stop_workers()
+        deployment = load_deployment_config()
+        _start_workers()
+    return {"status": "ok", "hall": hall, "camera_count": len(cameras)}
+
+
+@app.get("/api/setup/config")
+async def get_setup_config() -> dict:
+    """Part F: current raw deployment.json content, for the setup UI to
+    show what's already configured (existing halls/cameras) before adding
+    or editing more."""
+    import json as _json
+
+    from backend.deployment_config import DEFAULT_CONFIG_PATH
+
+    return _json.loads(DEFAULT_CONFIG_PATH.read_text())
 
 
 async def broadcast_loop() -> None:

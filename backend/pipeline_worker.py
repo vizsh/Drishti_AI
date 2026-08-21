@@ -60,6 +60,8 @@ class SecondaryCameraFeed(threading.Thread):
         self.seat_cal = camera_config.calibration
         self.pose_estimator = PoseEstimator(device=device)
         self.video_path = camera_config.video_path
+        self.image_width = camera_config.image_width
+        self.image_height = camera_config.image_height
         self.target_fps = target_fps
         self._stop_event = threading.Event()
         self._lock = threading.Lock()
@@ -103,7 +105,7 @@ class SecondaryCameraFeed(threading.Thread):
                         self._prev_keypoints[seat_id] = keypoints
                         obs = SeatObservation(
                             camera_id=self.seat_cal.camera_id,
-                            torso_yaw=p.torso_yaw_proxy(),
+                            torso_yaw=p.hybrid_torso_yaw(self.image_width, self.image_height),
                             motion_magnitude=motion,
                             pose_confidence=p.detection_confidence(),
                         )
@@ -130,6 +132,8 @@ class PipelineWorker(threading.Thread):
         super().__init__(daemon=True)
         self.camera_id = primary.camera_id
         self.video_path = primary.video_path
+        self.image_width = primary.image_width
+        self.image_height = primary.image_height
         self.event_queue = event_queue
         self.device = device
         self.target_fps = target_fps
@@ -413,7 +417,7 @@ class PipelineWorker(threading.Thread):
                     # calibration/multi_camera.py and config/deployment.json.
                     primary_obs = SeatObservation(
                         camera_id=self.seat_cal.camera_id,
-                        torso_yaw=p.torso_yaw_proxy(),
+                        torso_yaw=p.hybrid_torso_yaw(self.image_width, self.image_height),
                         motion_magnitude=motion,
                         pose_confidence=p.detection_confidence(),
                     )

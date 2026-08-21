@@ -29,6 +29,7 @@ import numpy as np
 from ultralytics import YOLO
 
 from perception.one_euro_filter import KeypointSmoother
+from perception.head_pose import solve_head_pose
 
 KEYPOINT_NAMES = [
     "nose", "left_eye", "right_eye", "left_ear", "right_ear",
@@ -74,6 +75,30 @@ class PoseResult:
         hip_mid_x = (lh[0] + rh[0]) / 2.0
         shoulder_width = abs(rs[0] - ls[0]) or 1.0
         return (shoulder_mid_x - hip_mid_x) / shoulder_width
+
+    def hybrid_torso_yaw(self, image_width: int, image_height: int) -> Optional[float]:
+        """Phase 2a (2026-08-21): completes the originally-planned hybrid
+        head-pose fallback. Runs a PnP solve (perception/head_pose.py) on
+        face keypoints when they're confidently detected — a materially
+        more precise directional signal than the shoulder/hip proxy — and
+        falls back to torso_yaw_proxy() EXACTLY as it worked before
+        whenever face keypoints aren't good enough. Purely additive:
+        torso_yaw_proxy() itself is untouched.
+
+        The PnP yaw (degrees) is divided by 90 to land on roughly the same
+        numeric scale torso_yaw_proxy()'s shoulder-width-normalized ratio
+        uses. This matters beyond cosmetics: baseline calibration is a
+        per-seat z-score over whatever this method returns, computed over a
+        mix of frames that may use either source (a student's face keypoints
+        can go from confident to occluded frame-to-frame) — without a
+        comparable scale, switching sources mid-session would corrupt that
+        seat's baseline statistics with two incompatible units.
+        """
+        keypoints = self.smoothed_keypoints or self.keypoints
+        head_pose = solve_head_pose(keypoints, self.keypoint_confidence, image_width, image_height)
+        if head_pose is not None:
+            return head_pose.yaw_deg / 90.0
+        return self.torso_yaw_proxy()
 
     def detection_confidence(self) -> float:
         """Overall reliability of this frame's pose for behaviour scoring —

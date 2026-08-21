@@ -533,7 +533,7 @@ class PipelineWorker(threading.Thread):
                             "cameras": fused_cameras,
                         }
                     )
-                    if assessment.explanation and self._alerting_enabled():
+                    if assessment.explanation and assessment.is_alert and self._alerting_enabled():
                         evidence_url = self._capture_evidence(seat_id, assessment.triggering_event)
                         self.event_queue.put(
                             {

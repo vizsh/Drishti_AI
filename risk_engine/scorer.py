@@ -26,6 +26,7 @@ class RiskAssessment:
     risk_score: float  # roughly 0.0-1.0, unbounded above under repeated events
     explanation: Optional[str]
     triggering_event: Optional[DeviationEvent]
+    is_alert: bool = False  # Part B (2026-08-21): corroborated enough for a full alert, not just watch
 
 
 class RiskEngine:
@@ -38,6 +39,9 @@ class RiskEngine:
         weight_pattern: float = 0.25,
         weight_object: float = 0.15,
         weight_gesture: float = 0.2,
+        alert_min_duration: float = 3.5,
+        alert_min_repeat_count: int = 2,
+        alert_cap_when_uncorroborated: float = 0.45,
     ):
         self.detector = SustainedDeviationDetector(zscore_threshold, min_event_duration)
         self.pattern_tracker = EventPatternTracker(pattern_window_seconds)
@@ -45,6 +49,18 @@ class RiskEngine:
         self.weight_pattern = weight_pattern
         self.weight_object = weight_object
         self.weight_gesture = weight_gesture
+        # Part B (2026-08-21 pre-demo hardening): min_event_duration (above)
+        # is the floor for "is this even a real DeviationEvent" (debounces
+        # single-frame noise) - confirmed via risk_engine/events.py that
+        # this is a genuinely enforced code check, not just a UI label. But
+        # audited alongside it: that floor alone was ALSO sufficient for a
+        # full "alert" (dispatchable, evidence-capturing) with zero second
+        # signal - a lone 1.5s torso/motion blip qualified. These three
+        # constants raise the bar for "alert" specifically, without
+        # touching "watch" sensitivity at all - see observe() below.
+        self.alert_min_duration = alert_min_duration
+        self.alert_min_repeat_count = alert_min_repeat_count
+        self.alert_cap_when_uncorroborated = alert_cap_when_uncorroborated
 
     def observe(
         self,
@@ -106,8 +122,38 @@ class RiskEngine:
             + self.weight_gesture * gesture_component
         )
 
+        # Part B (2026-08-21 pre-demo hardening): a completed DeviationEvent
+        # only qualifies as a genuine "alert" — not just "watch" — when
+        # corroborated. "torso_yaw" (head/body rotation) maps to the PS's
+        # own named behaviours ("excessive head turning", "body rotation
+        # toward neighbouring students"), so sustained duration alone can
+        # still qualify it, provided that duration clears the stricter
+        # alert_min_duration bar (not just the 1.5s floor for "is this a
+        # real event at all"). "motion" (movement level) doesn't map to any
+        # specific named PS behaviour on its own — could be entirely
+        # innocuous (stretching, settling in) — so it NEVER qualifies by
+        # duration alone, only when corroborated by something else.
+        # Object detection, a concurrent gesture, or the pattern tracker
+        # confirming this isn't the first occurrence in the window all
+        # count as corroboration for either signal.
+        is_alert = False
+        if event is not None:
+            corroborated_by_object = object_label is not None
+            corroborated_by_gesture = gesture_active
+            corroborated_by_pattern = self.pattern_tracker.event_count(seat_id, timestamp) >= self.alert_min_repeat_count
+            corroborated_by_duration = event.signal == "torso_yaw" and event.duration >= self.alert_min_duration
+            is_alert = corroborated_by_duration or corroborated_by_object or corroborated_by_gesture or corroborated_by_pattern
+            if not is_alert:
+                # Uncorroborated single deviation: keep it visible as
+                # "watch" (below is capped just under the alert threshold),
+                # never escalate to "alert" - sensitivity isn't lost, only
+                # the standalone-alert claim is.
+                risk_score = min(risk_score, self.alert_cap_when_uncorroborated)
+
         explanation = None
         if event is not None:
             explanation = explain_event(event, baseline_yaw_mean, baseline_yaw_std, object_label)
 
-        return RiskAssessment(seat_id=seat_id, risk_score=risk_score, explanation=explanation, triggering_event=event)
+        return RiskAssessment(
+            seat_id=seat_id, risk_score=risk_score, explanation=explanation, triggering_event=event, is_alert=is_alert
+        )

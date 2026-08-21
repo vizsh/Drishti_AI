@@ -271,6 +271,16 @@ class PipelineWorker(threading.Thread):
         q = self.anchor_quality.snapshot()
         return {"camera_id": q.camera_id, "hit_rate": q.hit_rate, "sample_count": q.sample_count, "status": q.status}
 
+    def _alerting_enabled(self) -> bool:
+        """Part A (2026-08-21 pre-demo hardening): a camera whose seat-
+        anchor calibration is flagged needs_attention (Part 2.5) keeps
+        showing real-time risk/telemetry for monitoring, but must not
+        generate actionable alerts — a hit rate this low means most
+        "detections" that do land on a seat are more likely coincidental
+        than a genuinely tracked student, and an alert built on that isn't
+        trustworthy enough to dispatch an invigilator over."""
+        return self.anchor_quality.snapshot().status != "needs_attention"
+
     def render_heatmap_jpeg(self) -> Optional[bytes]:
         """Current session motion heatmap as JPEG bytes, or None before the
         first frame has been processed."""
@@ -420,15 +430,20 @@ class PipelineWorker(threading.Thread):
                             )
                         else:
                             gesture_active = True
-                            self.event_queue.put(
-                                {
-                                    "type": "gesture_alert",
-                                    "seat_id": seat_id,
-                                    "timestamp": sim_time,
-                                    "gesture": gesture_event.gesture,
-                                    "explanation": explain_gesture(gesture_event),
-                                }
-                            )
+                            # Part A (2026-08-21 pre-demo hardening): still
+                            # feeds risk_score/monitoring via gesture_active
+                            # above regardless - only the actionable event
+                            # (alert feed / evidence / dispatch) is gated.
+                            if self._alerting_enabled():
+                                self.event_queue.put(
+                                    {
+                                        "type": "gesture_alert",
+                                        "seat_id": seat_id,
+                                        "timestamp": sim_time,
+                                        "gesture": gesture_event.gesture,
+                                        "explanation": explain_gesture(gesture_event),
+                                    }
+                                )
 
                     keypoints = p.smoothed_keypoints or p.keypoints
                     shoulder_width = abs(keypoints[RIGHT_SHOULDER][0] - keypoints[LEFT_SHOULDER][0]) or 1.0
@@ -518,7 +533,7 @@ class PipelineWorker(threading.Thread):
                             "cameras": fused_cameras,
                         }
                     )
-                    if assessment.explanation:
+                    if assessment.explanation and self._alerting_enabled():
                         evidence_url = self._capture_evidence(seat_id, assessment.triggering_event)
                         self.event_queue.put(
                             {

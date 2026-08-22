@@ -40,6 +40,7 @@ class PersonDetector:
             classes=[COCO_PERSON_CLASS_ID],
             conf=self.confidence_threshold,
             device=self.device,
+            quantize="fp16" if self.device == "cuda" else None,
             verbose=False,
         )
         detections: List[Detection] = []

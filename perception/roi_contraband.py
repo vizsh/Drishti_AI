@@ -58,6 +58,34 @@ def workspace_roi(pose: PoseResult, image_width: int, image_height: int) -> Opti
     return (rx1, ry1, rx2, ry2)
 
 
+def _crop_and_resize(image: np.ndarray, roi: tuple[int, int, int, int], upscale: float) -> Optional[np.ndarray]:
+    x1, y1, x2, y2 = roi
+    crop = image[y1:y2, x1:x2]
+    if crop.size == 0:
+        return None
+    h, w = crop.shape[:2]
+    return cv2.resize(crop, (max(1, int(w * upscale)), max(1, int(h * upscale))))
+
+
+def _remap_to_full_frame(
+    detections: list[ObjectDetection], roi: tuple[int, int, int, int], upscale: float
+) -> list[ObjectDetection]:
+    x1, y1, _, _ = roi
+    return [
+        ObjectDetection(
+            label=d.label,
+            xyxy=(
+                x1 + d.xyxy[0] / upscale,
+                y1 + d.xyxy[1] / upscale,
+                x1 + d.xyxy[2] / upscale,
+                y1 + d.xyxy[3] / upscale,
+            ),
+            confidence=d.confidence,
+        )
+        for d in detections
+    ]
+
+
 def detect_in_roi(
     detector: ObjectDetector, image: np.ndarray, roi: tuple[int, int, int, int], upscale: float = 2.0
 ) -> list[ObjectDetection]:
@@ -65,21 +93,34 @@ def detect_in_roi(
     than the full downsampled frame gave it), runs detection, then maps
     boxes back to full-frame coordinates so callers don't need to know
     detection ran on a crop."""
-    x1, y1, x2, y2 = roi
-    crop = image[y1:y2, x1:x2]
-    if crop.size == 0:
+    resized = _crop_and_resize(image, roi, upscale)
+    if resized is None:
         return []
-    h, w = crop.shape[:2]
-    resized = cv2.resize(crop, (max(1, int(w * upscale)), max(1, int(h * upscale))))
-    detections = detector.detect(resized)
-    out: list[ObjectDetection] = []
-    for d in detections:
-        dx1, dy1, dx2, dy2 = d.xyxy
-        out.append(
-            ObjectDetection(
-                label=d.label,
-                xyxy=(x1 + dx1 / upscale, y1 + dy1 / upscale, x1 + dx2 / upscale, y1 + dy2 / upscale),
-                confidence=d.confidence,
-            )
-        )
+    return _remap_to_full_frame(detector.detect(resized), roi, upscale)
+
+
+def detect_in_rois_batched(
+    detector: ObjectDetector,
+    image: np.ndarray,
+    rois: list[tuple[int, int, int, int]],
+    upscale: float = 2.0,
+) -> list[list[ObjectDetection]]:
+    """Latency pass (2026-08-22): when multiple seats are due for an
+    object-detect check in the same frame, this replaces N sequential
+    detect_in_roi() calls (N Python calls + N CUDA kernel launches for the
+    identical model) with one batched forward pass over all N crops —
+    ObjectDetector.detect_batch(). Same crop/upscale/remap math as
+    detect_in_roi per seat, just issued together. Returns one detection
+    list per input roi, in the same order (an empty-crop roi still gets an
+    empty list at its index) — deliberately NOT keyed by seat_id, since two
+    ROIs could in principle resolve to the same seat (e.g. a transient
+    tracker glitch) and a dict would silently drop one."""
+    crops: list[Optional[np.ndarray]] = [_crop_and_resize(image, roi, upscale) for roi in rois]
+    valid_idxs = [i for i, c in enumerate(crops) if c is not None]
+    if not valid_idxs:
+        return [[] for _ in rois]
+    batched = detector.detect_batch([crops[i] for i in valid_idxs])  # type: ignore[list-item]
+    out: list[list[ObjectDetection]] = [[] for _ in rois]
+    for i, dets in zip(valid_idxs, batched):
+        out[i] = _remap_to_full_frame(dets, rois[i], upscale)
     return out

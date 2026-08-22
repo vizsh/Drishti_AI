@@ -31,7 +31,7 @@ from ingestion.video_source import VideoSource
 from perception.lighting import enhance_if_dark
 from perception.motion_heatmap import MotionHeatmapAccumulator
 from perception.object_detector import ObjectDetector
-from perception.roi_contraband import detect_in_roi, workspace_roi
+from perception.roi_contraband import detect_in_rois_batched, workspace_roi
 from perception.pose import LEFT_SHOULDER, RIGHT_SHOULDER, PoseEstimator
 from risk_engine.object_persistence import ObjectPersistenceTracker
 from risk_engine.scorer import RiskEngine
@@ -559,7 +559,13 @@ class PipelineWorker(threading.Thread):
                 # applies to this per-person ROI check (see
                 # calibration/compute_budget.py's docstring for why the
                 # shared full-frame pose pass above can't do the same).
-                object_detections: list = []
+                # Latency pass (2026-08-22): collect every seat due for a
+                # check this frame first, then run ONE batched detector
+                # call across all their crops (detect_in_rois_batched)
+                # instead of a separate model.predict() per seat — same
+                # per-seat cadence/ROI logic as before, just issued
+                # together so N due seats cost one CUDA launch instead of N.
+                due_rois: list[tuple[int, int, int, int]] = []
                 for p in poses:
                     if p.track_id is None:
                         continue
@@ -572,7 +578,12 @@ class PipelineWorker(threading.Thread):
                         continue
                     roi = workspace_roi(p, self.image_width, self.image_height)
                     if roi is not None:
-                        object_detections.extend(detect_in_roi(self.object_detector, detect_input, roi))
+                        due_rois.append(roi)
+                object_detections: list = [
+                    det
+                    for dets in detect_in_rois_batched(self.object_detector, detect_input, due_rois)
+                    for det in dets
+                ]
 
                 if self.stream_mode == "focused":
                     stream_interval = self.stream_every_n_frames

@@ -136,6 +136,7 @@ class PoseEstimator:
             image,
             conf=self.confidence_threshold,
             device=self.device,
+            quantize="fp16" if self.device == "cuda" else None,
             tracker=self.tracker_config,
             persist=True,
             verbose=False,

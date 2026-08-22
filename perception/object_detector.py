@@ -57,19 +57,38 @@ class ObjectDetector:
         self.device = device
 
     def detect(self, image: np.ndarray) -> List[ObjectDetection]:
+        return self.detect_batch([image])[0]
+
+    def detect_batch(self, images: List[np.ndarray]) -> List[List[ObjectDetection]]:
+        """Latency pass (2026-08-22): when 2+ seats need an object-detect
+        check in the same frame (backend/pipeline_worker.py loops over
+        every seat due for a check per calibration/compute_budget.py's
+        adaptive cadence), calling detect() once per seat means one Python
+        call + CUDA kernel launch per crop. Ultralytics natively batches a
+        list of images into one forward pass, which amortizes that launch
+        overhead across every crop instead of paying it per-seat — same
+        model, same weights, same per-image result, just issued together.
+        detect() above is now a batch of one, so both call sites share the
+        exact same code path instead of duplicating the box-parsing loop."""
+        if not images:
+            return []
         results = self.model.predict(
-            image,
+            images,
             classes=list(self.classes.keys()),
             conf=self.confidence_threshold,
             device=self.device,
+            quantize="fp16" if self.device == "cuda" else None,
             verbose=False,
         )
-        detections: List[ObjectDetection] = []
-        for box in results[0].boxes:
-            cls_id = int(box.cls[0])
-            x1, y1, x2, y2 = box.xyxy[0].tolist()
-            conf = float(box.conf[0])
-            detections.append(
-                ObjectDetection(label=self.classes.get(cls_id, str(cls_id)), xyxy=(x1, y1, x2, y2), confidence=conf)
-            )
-        return detections
+        out: List[List[ObjectDetection]] = []
+        for result in results:
+            detections: List[ObjectDetection] = []
+            for box in result.boxes:
+                cls_id = int(box.cls[0])
+                x1, y1, x2, y2 = box.xyxy[0].tolist()
+                conf = float(box.conf[0])
+                detections.append(
+                    ObjectDetection(label=self.classes.get(cls_id, str(cls_id)), xyxy=(x1, y1, x2, y2), confidence=conf)
+                )
+            out.append(detections)
+        return out

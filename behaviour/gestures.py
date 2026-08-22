@@ -40,6 +40,20 @@ from perception.pose import KEYPOINT_NAMES, PoseResult
 LEFT_WRIST = KEYPOINT_NAMES.index("left_wrist")
 RIGHT_WRIST = KEYPOINT_NAMES.index("right_wrist")
 
+# Accuracy hardening (2026-08-23, found live testing new real footage): no
+# genuine single hand-reach across a desk boundary plausibly lasts longer
+# than this — a "reach" that stays continuously active for tens of seconds
+# means a wrist keypoint is persistently resolving to the wrong seat
+# (imprecise/eyeballed calibration, lens distortion, overlapping snap
+# zones), not a real sustained gesture. A real camera produced exactly
+# this: a 92-second "hand_reach_across" event from calibration estimated
+# by eye rather than measured with calibrate_tool.py. Treated as a
+# likely_calibration_issue rather than a genuine incident, same as the
+# existing same-direction-repeat signature -- this is the SAME kind of
+# "this pattern means something is miscalibrated, not that a real
+# incident is happening" signal, not a new detection mechanism.
+MAX_PLAUSIBLE_REACH_SECONDS = 15.0
+
 
 def nearest_neighbor_seat(seat_cal: SeatCalibration, seat_id: str) -> Optional[str]:
     """The closest other calibrated seat, by plane distance — gives "toward
@@ -184,6 +198,7 @@ class GestureDetector:
             own_set = self.seat_question_sets.get(seat_id)
             neighbor_set = self.seat_question_sets.get(neighbor)
             same_set = (own_set == neighbor_set) if (own_set is not None and neighbor_set is not None) else None
+            implausibly_long = (timestamp - start) > MAX_PLAUSIBLE_REACH_SECONDS
 
             events.append(
                 GestureEvent(
@@ -192,7 +207,7 @@ class GestureDetector:
                     start_time=start,
                     end_time=timestamp,
                     neighbor_seat=neighbor,
-                    likely_calibration_issue=recent_count >= self.repeat_threshold,
+                    likely_calibration_issue=recent_count >= self.repeat_threshold or implausibly_long,
                     repeat_count=recent_count + 1,
                     repeat_window_seconds=self.repeat_window_seconds,
                     same_set_neighbor=same_set,

@@ -188,6 +188,97 @@ def feedback_label_summary() -> dict:
         }
 
 
+def _match_resolution(sim_time: float, candidates: list["FeedbackLabel"]) -> Optional["FeedbackLabel"]:
+    """Shared by evidence_vault_data and the final exam report: the real
+    (seat_id, sim_time-within-3s) match against FeedbackLabel, replacing
+    the old fuzzy free-text search over "feedback" EventLog rows the
+    report used before this table existed. Extracted so both call sites
+    use the exact same real match, not two independently-drifting ones."""
+    if not candidates:
+        return None
+    closest = min(candidates, key=lambda lbl: abs((lbl.sim_time or 1e9) - sim_time))
+    if closest.sim_time is not None and abs(closest.sim_time - sim_time) <= 3.0:
+        return closest
+    return None
+
+
+def exam_report_data(session_id: Optional[int], seat_ids: Optional[list[str]] = None) -> dict:
+    """Final Exam Report (2026-08-23): everything backend/report.py needs,
+    aggregated here so the PDF renderer stays pure presentation. Every
+    alert's resolution comes from the same real FeedbackLabel match
+    evidence_vault_data uses -- the report used to do a separate, fuzzier
+    free-text search over old "feedback" events, which is now retired in
+    favor of one real, structured source of truth for "what did a human
+    decide about this alert."""
+    with SessionLocal() as db:
+        alert_stmt = select(EventLog).where(EventLog.event_type.in_(["alert", "gesture_alert"]))
+        if session_id is not None:
+            alert_stmt = alert_stmt.where(EventLog.session_id == session_id)
+        if seat_ids:
+            alert_stmt = alert_stmt.where(EventLog.seat_id.in_(seat_ids))
+        alerts = db.execute(alert_stmt.order_by(EventLog.sim_time)).scalars().all()
+
+        ops_stmt = select(EventLog).where(EventLog.event_type.in_(["dispatch", "acknowledge"]))
+        if session_id is not None:
+            ops_stmt = ops_stmt.where(EventLog.session_id == session_id)
+        if seat_ids:
+            ops_stmt = ops_stmt.where(EventLog.seat_id.in_(seat_ids))
+        ops = db.execute(ops_stmt.order_by(EventLog.sim_time)).scalars().all()
+
+        label_stmt = select(FeedbackLabel)
+        if session_id is not None:
+            label_stmt = label_stmt.where(FeedbackLabel.session_id == session_id)
+        labels = db.execute(label_stmt).scalars().all()
+        labels_by_seat: dict[str, list[FeedbackLabel]] = {}
+        for lbl in labels:
+            labels_by_seat.setdefault(lbl.seat_id, []).append(lbl)
+
+        alert_rows = []
+        per_seat: dict[str, dict] = {}
+        confidences: list[float] = []
+        for a in alerts:
+            match = _match_resolution(a.sim_time, labels_by_seat.get(a.seat_id, []))
+            resolution = match.resolution if match else None
+            if a.confidence is not None:
+                confidences.append(a.confidence)
+            alert_rows.append(
+                {
+                    "sim_time": a.sim_time,
+                    "seat_id": a.seat_id,
+                    "event_type": a.event_type,
+                    "explanation": a.explanation,
+                    "confidence": a.confidence,
+                    "evidence_url": a.evidence_url,
+                    "resolution": resolution,
+                }
+            )
+            seat = per_seat.setdefault(
+                a.seat_id, {"seat_id": a.seat_id, "alert_count": 0, "confirmed": 0, "false_alarm": 0, "no_action": 0, "unresolved": 0}
+            )
+            seat["alert_count"] += 1
+            if resolution == "confirmed":
+                seat["confirmed"] += 1
+            elif resolution == "false_alarm":
+                seat["false_alarm"] += 1
+            elif resolution == "no_action":
+                seat["no_action"] += 1
+            else:
+                seat["unresolved"] += 1
+
+        ops_rows = [
+            {"sim_time": e.sim_time, "seat_id": e.seat_id, "explanation": e.explanation}
+            for e in ops
+        ]
+
+        return {
+            "alerts": alert_rows,
+            "ops": ops_rows,
+            "per_seat": sorted(per_seat.values(), key=lambda s: s["seat_id"]),
+            "total_labels": len(labels),
+            "avg_alert_confidence": round(sum(confidences) / len(confidences), 3) if confidences else None,
+        }
+
+
 def evidence_vault_data(session_id: Optional[int] = None, seat_ids: Optional[list[str]] = None) -> dict:
     """Evidence Vault (2026-08-23): every clip plus its REAL resolution
     status, matched from the FeedbackLabel table by (seat_id, sim_time
@@ -225,12 +316,7 @@ def evidence_vault_data(session_id: Optional[int] = None, seat_ids: Optional[lis
         no_action_count = 0
         confidences: list[float] = []
         for c in clips:
-            match: Optional[FeedbackLabel] = None
-            candidates = labels_by_seat.get(c.seat_id, [])
-            if candidates:
-                closest = min(candidates, key=lambda lbl: abs((lbl.sim_time or 1e9) - c.sim_time))
-                if closest.sim_time is not None and abs(closest.sim_time - c.sim_time) <= 3.0:
-                    match = closest
+            match = _match_resolution(c.sim_time, labels_by_seat.get(c.seat_id, []))
             resolution = match.resolution if match else None
             if resolution:
                 resolved_count += 1

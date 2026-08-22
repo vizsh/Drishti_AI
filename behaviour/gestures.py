@@ -75,6 +75,17 @@ class GestureEvent:
     likely_calibration_issue: bool = False
     repeat_count: int = 0
     repeat_window_seconds: float = 0.0
+    # Set-aware neighbor weighting (2026-08-23): a real anti-cheating
+    # practice already used by institutions is issuing alternating
+    # question-paper sets so adjacent students can't usefully copy off
+    # each other. A hand-reach toward a neighbor on the SAME set is
+    # meaningfully more suspicious than toward a different-set neighbor
+    # (copying only helps if the answers are comparable) — this makes an
+    # existing signal smarter with real domain context, not a new
+    # detection mechanism. None when the seating chart doesn't carry
+    # question-set data for these two seats (institution doesn't use the
+    # practice, or hasn't uploaded a chart) — never fabricated.
+    same_set_neighbor: Optional[bool] = None
 
     @property
     def duration(self) -> float:
@@ -122,6 +133,16 @@ class GestureDetector:
         self.repeat_window_seconds = repeat_window_seconds
         self.repeat_threshold = repeat_threshold
         self._recent_events: dict[tuple[str, str], deque[float]] = {}
+        # Set-aware neighbor weighting: seat_id -> question-set label,
+        # live-settable from the uploaded seating chart (see
+        # PipelineWorker.set_seat_question_sets). Empty until a chart with
+        # question-set data is actually uploaded — same_set_neighbor stays
+        # None (not False) for any seat missing from this map, so "we
+        # don't know" is never confused with "confirmed different sets."
+        self.seat_question_sets: dict[str, str] = {}
+
+    def set_question_sets(self, mapping: dict[str, str]) -> None:
+        self.seat_question_sets = mapping
 
     def observe(self, seat_id: str, pose: PoseResult, timestamp: float) -> list[GestureEvent]:
         events: list[GestureEvent] = []
@@ -160,6 +181,10 @@ class GestureDetector:
             recent_count = len(history)
             history.append(timestamp)
 
+            own_set = self.seat_question_sets.get(seat_id)
+            neighbor_set = self.seat_question_sets.get(neighbor)
+            same_set = (own_set == neighbor_set) if (own_set is not None and neighbor_set is not None) else None
+
             events.append(
                 GestureEvent(
                     seat_id=seat_id,
@@ -170,6 +195,7 @@ class GestureDetector:
                     likely_calibration_issue=recent_count >= self.repeat_threshold,
                     repeat_count=recent_count + 1,
                     repeat_window_seconds=self.repeat_window_seconds,
+                    same_set_neighbor=same_set,
                 )
             )
         return events
@@ -178,7 +204,10 @@ class GestureDetector:
 def explain_gesture(event: GestureEvent) -> str:
     """Deterministic template explanation, matching risk_engine/explain.py's
     style (docs/architecture.md §10) — measured facts only, no generative text."""
-    return f"Hand crossed into {event.neighbor_seat}'s desk space for {event.duration:.1f}s (from {event.seat_id})."
+    base = f"Hand crossed into {event.neighbor_seat}'s desk space for {event.duration:.1f}s (from {event.seat_id})."
+    if event.same_set_neighbor is True:
+        return base + " Both seats are on the same question-paper set."
+    return base
 
 
 def explain_calibration_warning(event: GestureEvent) -> str:

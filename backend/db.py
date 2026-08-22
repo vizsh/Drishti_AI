@@ -326,6 +326,13 @@ class SeatAssignment(Base):
     session_id: Mapped[int] = mapped_column(Integer, index=True)
     seat_id: Mapped[str] = mapped_column(String(50), index=True)
     occupant_label: Mapped[str] = mapped_column(String(200))
+    # Set-aware neighbor weighting + seating-pattern compliance
+    # (2026-08-23): which question-paper set (A/B/C/...) this seat was
+    # issued — real, common anti-cheating practice (alternating sets so
+    # adjacent students can't usefully copy off each other). Optional
+    # third CSV column; None for an institution that doesn't use this
+    # practice, in which case both features this feeds simply don't apply.
+    question_set: Mapped[Optional[str]] = mapped_column(String(20), nullable=True)
 
 
 def save_seating_chart(session_id: int, assignments: list[dict]) -> int:
@@ -335,7 +342,12 @@ def save_seating_chart(session_id: int, assignments: list[dict]) -> int:
     with SessionLocal() as db:
         db.execute(delete(SeatAssignment).where(SeatAssignment.session_id == session_id))
         rows = [
-            SeatAssignment(session_id=session_id, seat_id=a["seat_id"], occupant_label=a["occupant_label"])
+            SeatAssignment(
+                session_id=session_id,
+                seat_id=a["seat_id"],
+                occupant_label=a["occupant_label"],
+                question_set=a.get("question_set") or None,
+            )
             for a in assignments
             if a.get("seat_id") and a.get("occupant_label")
         ]
@@ -347,7 +359,10 @@ def save_seating_chart(session_id: int, assignments: list[dict]) -> int:
 def get_seating_chart(session_id: int) -> list[dict]:
     with SessionLocal() as db:
         rows = db.execute(select(SeatAssignment).where(SeatAssignment.session_id == session_id)).scalars().all()
-        return [{"seat_id": r.seat_id, "occupant_label": r.occupant_label} for r in rows]
+        return [
+            {"seat_id": r.seat_id, "occupant_label": r.occupant_label, "question_set": r.question_set}
+            for r in rows
+        ]
 
 
 def init_db() -> None:
@@ -368,12 +383,16 @@ def _migrate_add_missing_columns() -> None:
     from sqlalchemy import inspect, text
 
     inspector = inspect(engine)
-    if "feedback_labels" not in inspector.get_table_names():
-        return
-    existing_cols = {c["name"] for c in inspector.get_columns("feedback_labels")}
-    if "sim_time" not in existing_cols:
-        with engine.begin() as conn:
-            conn.execute(text("ALTER TABLE feedback_labels ADD COLUMN sim_time FLOAT"))
+    if "feedback_labels" in inspector.get_table_names():
+        existing_cols = {c["name"] for c in inspector.get_columns("feedback_labels")}
+        if "sim_time" not in existing_cols:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE feedback_labels ADD COLUMN sim_time FLOAT"))
+    if "seat_assignments" in inspector.get_table_names():
+        existing_cols = {c["name"] for c in inspector.get_columns("seat_assignments")}
+        if "question_set" not in existing_cols:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE seat_assignments ADD COLUMN question_set VARCHAR(20)"))
 
 
 def create_session(video_source: str) -> int:

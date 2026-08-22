@@ -1,9 +1,17 @@
 import { useEffect, useState } from 'react'
-import { ClipboardList, UploadCloud, CheckCircle2 } from 'lucide-react'
+import { ClipboardList, UploadCloud, CheckCircle2, ShieldAlert, ShieldCheck, ScanSearch } from 'lucide-react'
+import { STATUS_COLOR } from '../lib/colors'
 
 interface Assignment {
   seat_id: string
   occupant_label: string
+  question_set?: string | null
+}
+
+interface Violation {
+  seat_a: string
+  seat_b: string
+  question_set: string
 }
 
 // Seating chart upload (2026-08-23): a real institution roster — which
@@ -19,6 +27,8 @@ export function SeatingChartUpload() {
   const [assignments, setAssignments] = useState<Assignment[]>([])
   const [error, setError] = useState<string | null>(null)
   const [saved, setSaved] = useState(false)
+  const [violations, setViolations] = useState<Violation[] | null>(null)
+  const [checking, setChecking] = useState(false)
 
   useEffect(() => {
     fetch('/api/seating-chart')
@@ -34,15 +44,27 @@ export function SeatingChartUpload() {
       .filter(Boolean)
       .filter((line) => !/^seat.?id/i.test(line)) // skip an optional header row
       .map((line) => {
-        const [seat_id, ...rest] = line.split(',')
-        return { seat_id: seat_id?.trim(), occupant_label: rest.join(',').trim() }
+        const [seat_id, occupant_label, question_set] = line.split(',').map((s) => s.trim())
+        return { seat_id, occupant_label, question_set: question_set || null }
       })
       .filter((a) => a.seat_id && a.occupant_label)
+  }
+
+  async function checkCompliance() {
+    setChecking(true)
+    try {
+      const res = await fetch('/api/seating-chart/compliance')
+      const d = await res.json()
+      setViolations(d.violations ?? [])
+    } finally {
+      setChecking(false)
+    }
   }
 
   async function handleFile(file: File) {
     setError(null)
     setSaved(false)
+    setViolations(null)
     try {
       const text = await file.text()
       const parsed = parseCsv(text)
@@ -67,8 +89,9 @@ export function SeatingChartUpload() {
         <h2 className="text-sm font-bold uppercase tracking-wide">Seating chart</h2>
       </div>
       <p className="text-[11px] mono text-white/40 mb-3">
-        upload which seat should have which student (CSV: <code className="text-white/60">seat_id,occupant_label</code> per
-        line) — record-keeping only, never used for detection or identity
+        upload which seat should have which student (CSV: <code className="text-white/60">seat_id,occupant_label,question_set</code>{' '}
+        per line — question_set is optional, for institutions issuing alternating sets) — record-keeping only, never
+        used for detection or identity
       </p>
       <label className="flex items-center gap-2 text-[11px] mono text-white/50 px-3 py-2 rounded-lg border border-white/12 hover:border-white/25 cursor-pointer w-fit mb-3">
         <UploadCloud size={13} />
@@ -92,14 +115,41 @@ export function SeatingChartUpload() {
         </p>
       )}
       {assignments.length > 0 && (
-        <div className="flex flex-wrap gap-1.5">
+        <div className="flex flex-wrap gap-1.5 mb-3">
           {assignments.slice(0, 12).map((a) => (
             <span key={a.seat_id} className="text-[10px] mono px-2 py-1 rounded-md border border-white/10 text-white/50">
-              {a.seat_id} &rarr; {a.occupant_label}
+              {a.seat_id} &rarr; {a.occupant_label}{a.question_set ? ` (set ${a.question_set})` : ''}
             </span>
           ))}
           {assignments.length > 12 && (
             <span className="text-[10px] mono px-2 py-1 text-white/30">+{assignments.length - 12} more</span>
+          )}
+        </div>
+      )}
+      {assignments.some((a) => a.question_set) && (
+        <div className="border-t border-white/8 pt-3">
+          <button
+            onClick={checkCompliance}
+            disabled={checking}
+            className="flex items-center gap-1.5 text-[11px] mono px-3 py-2 rounded-lg border border-white/15 hover:border-white/30 text-white/70 disabled:opacity-50 mb-2"
+          >
+            <ScanSearch size={12} /> {checking ? 'checking…' : 'check alternating-set compliance'}
+          </button>
+          {violations !== null && (
+            violations.length === 0 ? (
+              <p className="text-[11px] mono flex items-center gap-1" style={{ color: STATUS_COLOR.calm }}>
+                <ShieldCheck size={12} /> no adjacent same-set pairs found — alternating pattern holds
+              </p>
+            ) : (
+              <div className="space-y-1">
+                {violations.map((v, i) => (
+                  <div key={i} className="flex items-center gap-1.5 text-[11px]" style={{ color: STATUS_COLOR.watch }}>
+                    <ShieldAlert size={12} />
+                    {v.seat_a.toUpperCase()} and {v.seat_b.toUpperCase()} are adjacent and both on set {v.question_set}
+                  </div>
+                ))}
+              </div>
+            )
           )}
         </div>
       )}

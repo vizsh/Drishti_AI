@@ -34,6 +34,7 @@ from backend import db, video_stream_manager
 from backend.deployment_config import DeploymentConfig, load_deployment_config, save_hall_cameras, set_camera_disconnected
 from backend.pipeline_worker import PipelineWorker
 from backend.report import generate_session_report_pdf
+from behaviour.gestures import nearest_neighbor_seat
 from calibration.blind_spot_tracker import LiveBlindSpotTracker
 from calibration.coverage import CameraCoverageInput, validate_coverage
 from calibration.room_scan import RoomScanSession
@@ -204,6 +205,8 @@ def _start_workers() -> None:
         for seat_id in w.seat_cal.seats:
             seat_to_worker[seat_id] = w
         w.start()
+    if session_id is not None:
+        _apply_seat_question_sets(db.get_seating_chart(session_id))
 
 
 def _stop_workers() -> None:
@@ -513,7 +516,20 @@ async def upload_seating_chart(body: dict, user: dict = Depends(get_current_user
         raise HTTPException(status_code=400, detail="no active session")
     assignments = body.get("assignments", [])
     saved = await asyncio.to_thread(db.save_seating_chart, session_id, assignments)
+    _apply_seat_question_sets(assignments)
     return {"status": "ok", "saved": saved}
+
+
+def _apply_seat_question_sets(assignments: list[dict]) -> None:
+    """Set-aware neighbor weighting (2026-08-23): pushes seat_id ->
+    question_set to every running worker's GestureDetector, live, no
+    restart -- same pattern as apply_sensitivity/set_exam_duration.
+    Assignments with no question_set are simply omitted from the map, so
+    an institution not using this practice gets same_set_neighbor=None
+    everywhere (unknown, never fabricated as False)."""
+    mapping = {a["seat_id"]: a["question_set"] for a in assignments if a.get("seat_id") and a.get("question_set")}
+    for w in workers:
+        w.set_seat_question_sets(mapping)
 
 
 @app.get("/api/seating-chart")
@@ -521,6 +537,43 @@ async def get_seating_chart_endpoint(user: dict = Depends(get_current_user)) -> 
     if session_id is None:
         return {"assignments": []}
     return {"assignments": await asyncio.to_thread(db.get_seating_chart, session_id)}
+
+
+@app.get("/api/seating-chart/compliance")
+async def seating_pattern_compliance(user: dict = Depends(get_current_user)) -> dict:
+    """Seating-pattern compliance check (2026-08-23): verifies the
+    alternating-question-set policy was actually followed, BEFORE the
+    exam starts — same underlying seat-assignment data #2 (set-aware
+    neighbor weighting) uses, checked a different way. For every seat
+    with a question_set, finds its real geometric neighbor (the exact
+    same nearest_neighbor_seat() the live gesture detector uses, not a
+    separate notion of "adjacent") and flags a violation if that neighbor
+    is confirmed to be on the SAME set. Only checks seats this deployment
+    actually has geometry for (a worker's seat_cal) — a chart naming a
+    seat with no camera calibration can't be geometrically checked and is
+    silently skipped rather than guessed at."""
+    if session_id is None:
+        return {"violations": [], "checked_pairs": 0}
+    assignments = await asyncio.to_thread(db.get_seating_chart, session_id)
+    question_sets = {a["seat_id"]: a["question_set"] for a in assignments if a.get("question_set")}
+    violations: list[dict] = []
+    checked = set()
+    for w in workers:
+        for seat_id in w.seat_cal.seats:
+            own_set = question_sets.get(seat_id)
+            if own_set is None:
+                continue
+            neighbor = nearest_neighbor_seat(w.seat_cal, seat_id)
+            if neighbor is None:
+                continue
+            pair = tuple(sorted((seat_id, neighbor)))
+            if pair in checked:
+                continue
+            checked.add(pair)
+            neighbor_set = question_sets.get(neighbor)
+            if neighbor_set is not None and neighbor_set == own_set:
+                violations.append({"seat_a": pair[0], "seat_b": pair[1], "question_set": own_set})
+    return {"violations": violations, "checked_pairs": len(checked)}
 
 
 @app.post("/api/patrol/check-in")

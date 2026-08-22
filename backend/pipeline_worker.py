@@ -376,6 +376,14 @@ class PipelineWorker(threading.Thread):
         self._notify_cooldown_s = preset["notify_cooldown_s"]
         self._gesture_notify_cooldown_s = preset["gesture_notify_cooldown_s"]
 
+    def set_seat_question_sets(self, mapping: dict[str, str]) -> None:
+        """Set-aware neighbor weighting (2026-08-23): live-pushed from the
+        uploaded seating chart -- lets GestureDetector tell a hand-reach
+        toward a SAME-question-set neighbor (meaningfully more suspicious,
+        real domain knowledge) apart from a different-set one, without
+        adding a second detection mechanism."""
+        self.gesture_detector.set_question_sets(mapping)
+
     def set_exam_duration(self, minutes: Optional[float]) -> None:
         """Exam-phase-aware sensitivity (2026-08-23): the settling window
         already treats the FIRST few minutes as legitimately elevated
@@ -698,8 +706,23 @@ class PipelineWorker(threading.Thread):
                                 # enough; occurrence 1 never notifies,
                                 # occurrence 2+ (a real pattern starting)
                                 # can, still subject to the cooldown.
+                                #
+                                # Set-aware neighbor weighting (2026-08-23):
+                                # the one exception is a hand-reach toward a
+                                # neighbor confirmed to be on the SAME
+                                # question-paper set (only possible when a
+                                # seating chart with set data has actually
+                                # been uploaded) -- real domain knowledge
+                                # institutions already use is that copying
+                                # only helps against a same-set neighbor, so
+                                # this specific reach is meaningfully more
+                                # suspicious than the ambiguous "could be an
+                                # innocent stretch" case the >=2 floor exists
+                                # for, and gets to notify on its first
+                                # occurrence, still subject to the cooldown.
+                                min_occurrence = 1 if gesture_event.same_set_neighbor is True else 2
                                 gesture_notify = (
-                                    self._seat_gesture_counts[seat_id] >= 2
+                                    self._seat_gesture_counts[seat_id] >= min_occurrence
                                     and (sim_time - last_gesture_notify) >= self._gesture_notify_cooldown_s
                                 )
                                 if gesture_notify:
@@ -727,6 +750,7 @@ class PipelineWorker(threading.Thread):
                                         # involved instead of only labeling
                                         # the source seat.
                                         "neighbor_seat": gesture_event.neighbor_seat,
+                                        "same_set_neighbor": gesture_event.same_set_neighbor,
                                     }
                                 )
 

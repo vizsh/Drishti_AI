@@ -125,7 +125,7 @@ const STEPS: Step[] = [
     ),
   },
   {
-    title: 'Command Center: all calm',
+    title: 'Live Monitor: all calm',
     narration: 'The default view after login — every camera the logged-in role can see, grouped by hall. Calm by default: nothing here is competing for attention.',
     render: () => (
       <div className="grid grid-cols-2 md:grid-cols-3 gap-3 max-w-2xl">

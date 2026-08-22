@@ -19,7 +19,7 @@ export function LoginPage() {
       setError(result.error ?? 'Login failed')
       return
     }
-    const from = (location.state as { from?: string })?.from ?? '/command-center'
+    const from = (location.state as { from?: string })?.from ?? '/dashboard'
     navigate(from, { replace: true })
   }
 

@@ -67,7 +67,7 @@ export function DashboardPage() {
 
   return (
     <div>
-      <h1 className="text-lg font-bold mb-1">Dashboard</h1>
+      <h1 className="text-lg font-bold mb-1">Live Monitor</h1>
       <p className="text-xs mono text-white/35 mb-6">
         every configured camera, at a glance · click a tile for the full investigation view
       </p>

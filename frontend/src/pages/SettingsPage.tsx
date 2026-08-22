@@ -3,6 +3,7 @@ import { useState } from 'react'
 import { Settings as SettingsIcon, ShieldCheck, ChevronRight, PlayCircle, Volume2, VolumeX } from 'lucide-react'
 import { useAuth, DEMO_ACCOUNTS } from '../state/AuthContext'
 import { ExamTypeSelector } from '../components/ExamTypeSelector'
+import { SensitivitySelector } from '../components/SensitivitySelector'
 import { setAudioMuted, isAudioMuted } from '../lib/audio'
 
 export function SettingsPage() {
@@ -35,6 +36,7 @@ export function SettingsPage() {
       </div>
 
       <ExamTypeSelector />
+      <SensitivitySelector />
 
       <div className="rounded-2xl border border-white/8 p-5 mb-5 max-w-lg bg-white/3">
         <h2 className="text-sm font-bold uppercase tracking-wide mb-3">Audio Alerts</h2>
@@ -77,7 +79,7 @@ export function SettingsPage() {
       <div className="rounded-2xl border border-white/8 p-5 max-w-lg bg-white/3">
         <h2 className="text-sm font-bold uppercase tracking-wide mb-3">Demo accounts</h2>
         <p className="text-[11px] mono text-white/35 mb-3">
-          Role-based hall scoping applies consistently everywhere — Command Center, Examination Hall, Alerts, and Evidence Vault all filter through the same scope.
+          Role-based hall scoping applies consistently everywhere — Live Monitor, Examination Hall, Alert Inbox, and Evidence Vault all filter through the same scope.
         </p>
         <div className="flex flex-col gap-2">
           {DEMO_ACCOUNTS.map((acct) => (

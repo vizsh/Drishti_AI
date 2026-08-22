@@ -14,7 +14,16 @@ export function AlertsPage() {
 
   return (
     <div>
-      <AlertFeed alerts={scopedAlerts} feedback={feedback} seatIds={seatIds} onDismiss={dismissAlert} onDispatch={dispatchInvigilator} onAcknowledge={acknowledgeAlert} onViewEvidence={setEvidenceUrl} />
+      <AlertFeed
+        alerts={scopedAlerts}
+        feedback={feedback}
+        seatIds={seatIds}
+        onDismiss={dismissAlert}
+        onDispatch={dispatchInvigilator}
+        onAcknowledge={acknowledgeAlert}
+        onViewEvidence={setEvidenceUrl}
+        groupByReview
+      />
       <EventLog onViewEvidence={setEvidenceUrl} />
       <EvidenceModal url={evidenceUrl} onClose={() => setEvidenceUrl(null)} />
     </div>

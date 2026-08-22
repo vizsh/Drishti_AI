@@ -1,22 +1,33 @@
 import { NavLink } from 'react-router-dom'
-import { LayoutGrid, LayoutDashboard, Grid3x3, Bell, FolderOpen, BarChart3, Settings, LogOut, Radar, ScanLine } from 'lucide-react'
+import { LayoutDashboard, Grid3x3, Bell, FolderOpen, BarChart3, Settings, LogOut, Radar, ScanLine } from 'lucide-react'
 import { useAuth } from '../state/AuthContext'
 
-// Lab Setup promoted out of Settings (2026-08-22) — configuring the
-// physical deployment (cameras, calibration, room-sensing scan) is a
-// primary task for whoever runs this system, not a buried settings
-// sub-page. Every setup feature (multi-camera calibration, live blind-
-// spot analysis, video-upload-as-live-feed, exam type, the room-scan
-// animation) lives at this one entry point.
-const NAV_ITEMS = [
-  { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
-  { to: '/command-center', label: 'Command Center', icon: LayoutGrid },
-  { to: '/overview', label: 'Examination Hall', icon: Grid3x3 },
-  { to: '/lab-setup', label: 'Lab Setup', icon: ScanLine },
-  { to: '/alerts', label: 'Alerts', icon: Bell },
-  { to: '/evidence-vault', label: 'Evidence Vault', icon: FolderOpen },
-  { to: '/analytics', label: 'Analytics', icon: BarChart3 },
-  { to: '/settings', label: 'Settings', icon: Settings },
+// Product audit (2026-08-22): grouped nav (reference: KEYFRAME mockup's
+// "Monitor" / "Configure" split) — Command Center retired (Dashboard,
+// renamed "Live Monitor" here, already does its job with real per-tile
+// alerts and every camera actually streaming, which Command Center never
+// could). Eight flat destinations answering three overlapping "is
+// anything wrong" questions is exactly the redundancy the product audit
+// named; six grouped ones, each answering a genuinely different question,
+// replace it.
+const NAV_GROUPS = [
+  {
+    label: 'Monitor',
+    items: [
+      { to: '/dashboard', label: 'Live Monitor', icon: LayoutDashboard },
+      { to: '/overview', label: 'Examination Hall', icon: Grid3x3 },
+      { to: '/alerts', label: 'Alert Inbox', icon: Bell },
+      { to: '/evidence-vault', label: 'Evidence Vault', icon: FolderOpen },
+    ],
+  },
+  {
+    label: 'Configure',
+    items: [
+      { to: '/lab-setup', label: 'Lab Setup', icon: ScanLine },
+      { to: '/analytics', label: 'Analytics', icon: BarChart3 },
+      { to: '/settings', label: 'Settings', icon: Settings },
+    ],
+  },
 ]
 
 export function Sidebar() {
@@ -42,20 +53,27 @@ export function Sidebar() {
       </div>
 
       <nav className="flex flex-col gap-1 flex-1">
-        {NAV_ITEMS.map((item) => (
-          <NavLink
-            key={item.to}
-            to={item.to}
-            title={item.label}
-            className={({ isActive }) =>
-              `flex items-center justify-center lg:justify-start gap-2.5 px-0 lg:px-3 py-2.5 rounded-lg text-xs transition-colors ${
-                isActive ? 'bg-white/8 text-white' : 'text-white/45 hover:text-white/75 hover:bg-white/4'
-              }`
-            }
-          >
-            <item.icon size={16} />
-            <span className="hidden lg:inline">{item.label}</span>
-          </NavLink>
+        {NAV_GROUPS.map((group) => (
+          <div key={group.label} className="mb-2">
+            <div className="hidden lg:block text-[10px] mono uppercase tracking-widest text-white/25 px-3 pt-3 pb-1.5">
+              {group.label}
+            </div>
+            {group.items.map((item) => (
+              <NavLink
+                key={item.to}
+                to={item.to}
+                title={item.label}
+                className={({ isActive }) =>
+                  `flex items-center justify-center lg:justify-start gap-2.5 px-0 lg:px-3 py-2.5 rounded-lg text-xs transition-colors ${
+                    isActive ? 'bg-white/8 text-white' : 'text-white/45 hover:text-white/75 hover:bg-white/4'
+                  }`
+                }
+              >
+                <item.icon size={16} />
+                <span className="hidden lg:inline">{item.label}</span>
+              </NavLink>
+            ))}
+          </div>
         ))}
       </nav>
 

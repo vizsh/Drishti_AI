@@ -17,7 +17,7 @@ export interface CameraInfo {
 /**
  * Role-based hall scoping (Phase 1): a Controller sees every hall; an
  * Invigilator only ever sees their assigned hall's cameras/seats. This
- * hook is the single source of truth every later view (Command Center,
+ * hook is the single source of truth every later view (Live Monitor,
  * Examination Hall, Alerts, Evidence Vault) filters through, so scoping
  * stays consistent instead of being reimplemented per page.
  */

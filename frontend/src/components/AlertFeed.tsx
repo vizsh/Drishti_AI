@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { AnimatePresence, motion } from 'framer-motion'
-import { PlayCircle, X, ChevronDown, UserPlus, Check, ShieldAlert, MinusCircle, ShieldCheck, Eye } from 'lucide-react'
+import { PlayCircle, X, ChevronDown, UserPlus, Check, ShieldAlert, MinusCircle, ShieldCheck, Eye, Inbox } from 'lucide-react'
 import type { AlertItem } from '../types'
 import { seatColor } from '../lib/colors'
 import { Badge } from './Badge'
@@ -22,13 +22,36 @@ interface Props {
   onAlertClick?: (alert: AlertItem) => void
   limit?: number
   showViewAllLink?: boolean
+  // Product audit (2026-08-22): the Alert Inbox fix -- an unbounded feed
+  // of every alert/gesture/calibration event ever, newest first, reads as
+  // noise no matter how accurate each individual item is. When true,
+  // splits the same data into "needs your review" (unresolved, real
+  // evidence) and "logged" (everything else, collapsed by default) --
+  // only the full-page Alert Inbox opts into this; compact previews
+  // elsewhere (a seat's own history, the Examination Hall sidebar) stay a
+  // simple flat list, where the split adds nothing at that scale.
+  groupByReview?: boolean
 }
 
-export function AlertFeed({ alerts, feedback, seatIds, onDismiss, onDispatch, onAcknowledge, onViewEvidence, onAlertClick, limit, showViewAllLink }: Props) {
+function needsReview(item: AlertItem, resolved: Map<string, Resolution>): boolean {
+  if (resolved.has(item.id)) return false
+  if (item.kind === 'alert') return true
+  // A gesture that actually earned a notification (a repeating pattern,
+  // per backend/pipeline_worker.py's gesture cooldown) is real enough to
+  // warrant a look; a single occurrence or a calibration-issue signature
+  // is exactly the "ordinary movement" noise this split exists to hide.
+  if (item.kind === 'gesture') return item.notify === true
+  return false
+}
+
+export function AlertFeed({ alerts, feedback, seatIds, onDismiss, onDispatch, onAcknowledge, onViewEvidence, onAlertClick, limit, showViewAllLink, groupByReview }: Props) {
   const [resolved, setResolved] = useState<Map<string, Resolution>>(new Map())
   const [dispatched, setDispatched] = useState<Map<string, string>>(new Map())
   const [acknowledged, setAcknowledged] = useState<Map<string, string>>(new Map())
+  const [showLogged, setShowLogged] = useState(false)
   const visible = limit ? alerts.slice(0, limit) : alerts
+  const reviewItems = groupByReview ? visible.filter((a) => needsReview(a, resolved)) : visible
+  const loggedItems = groupByReview ? visible.filter((a) => !needsReview(a, resolved)) : []
 
   const handleResolve = async (item: AlertItem, resolution: Resolution, invigilator?: string) => {
     setResolved((prev) => new Map(prev).set(item.id, resolution))
@@ -45,47 +68,104 @@ export function AlertFeed({ alerts, feedback, seatIds, onDismiss, onDispatch, on
     if (onAcknowledge) await onAcknowledge(item.seatId, invigilator)
   }
 
+  function renderCard(item: AlertItem) {
+    return (
+      <AlertCard
+        key={item.id}
+        item={item}
+        seatIds={seatIds}
+        resolution={resolved.get(item.id) ?? null}
+        dispatchedTo={dispatched.get(item.id) ?? null}
+        acknowledgedBy={acknowledged.get(item.id) ?? null}
+        onResolve={handleResolve}
+        onDispatch={handleDispatch}
+        onAcknowledge={handleAcknowledge}
+        onViewEvidence={onViewEvidence}
+        onAlertClick={onAlertClick}
+      />
+    )
+  }
+
+  if (!groupByReview) {
+    return (
+      <div>
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-sm font-bold uppercase tracking-wide">Alert feed</h2>
+          {showViewAllLink && (
+            <Link to="/alerts" className="text-[11px] mono text-white/50 hover:text-white/80">
+              view all →
+            </Link>
+          )}
+        </div>
+        <div className="rounded-2xl border border-white/8 p-3 flex flex-col gap-2 overflow-y-auto" style={{ height: limit ? 'auto' : 560, maxHeight: 560 }}>
+          {feedback.map((msg, i) => (
+            <div key={`fb-${i}`} className="text-[11px] mono px-3 py-2 rounded-lg bg-white/5 text-white/60">
+              ↺ {msg}
+            </div>
+          ))}
+          {visible.length === 0 && feedback.length === 0 && (
+            <EmptyState
+              icon={ShieldCheck}
+              title="All calm — no alerts yet"
+              body="Nothing has crossed a student's own baseline deviation threshold this session. This feed updates in real time as soon as something does."
+            />
+          )}
+          <AnimatePresence initial={false}>{visible.map(renderCard)}</AnimatePresence>
+        </div>
+      </div>
+    )
+  }
+
+  // Alert Inbox (product audit, 2026-08-22): two sections instead of one
+  // scrolling list. "Needs your review" is short by design -- if it's
+  // long, the accuracy gates upstream aren't doing their job, not this
+  // page's. "Logged" is collapsed by default; it exists for audit, not
+  // for triage.
   return (
     <div>
       <div className="flex items-center justify-between mb-3">
-        <h2 className="text-sm font-bold uppercase tracking-wide">Alert feed</h2>
-        {showViewAllLink && (
-          <Link to="/alerts" className="text-[11px] mono text-white/50 hover:text-white/80">
-            view all →
-          </Link>
-        )}
+        <h2 className="text-sm font-bold uppercase tracking-wide flex items-center gap-2">
+          <Inbox size={14} className="text-white/50" /> Alert inbox
+        </h2>
+        <span className="text-[11px] mono text-white/40">
+          {reviewItems.length} need{reviewItems.length === 1 ? 's' : ''} review · {loggedItems.length} logged
+        </span>
       </div>
-      <div className="rounded-2xl border border-white/8 p-3 flex flex-col gap-2 overflow-y-auto" style={{ height: limit ? 'auto' : 560, maxHeight: 560 }}>
-        {feedback.map((msg, i) => (
-          <div key={`fb-${i}`} className="text-[11px] mono px-3 py-2 rounded-lg bg-white/5 text-white/60">
-            ↺ {msg}
-          </div>
-        ))}
-        {visible.length === 0 && feedback.length === 0 && (
+
+      {feedback.map((msg, i) => (
+        <div key={`fb-${i}`} className="text-[11px] mono px-3 py-2 rounded-lg bg-white/5 text-white/60 mb-2">
+          ↺ {msg}
+        </div>
+      ))}
+
+      <div className="text-[10px] mono uppercase tracking-widest text-white/35 mb-2">needs your review</div>
+      <div className="rounded-2xl border border-white/8 p-3 flex flex-col gap-2 mb-5">
+        {reviewItems.length === 0 && (
           <EmptyState
             icon={ShieldCheck}
-            title="All calm — no alerts yet"
-            body="Nothing has crossed a student's own baseline deviation threshold this session. This feed updates in real time as soon as something does."
+            title="Nothing needs review right now"
+            body="Every alert here has cleared real corroboration and hasn't been resolved yet. Calm is the expected state, not a gap in coverage."
           />
         )}
-        <AnimatePresence initial={false}>
-          {visible.map((item) => (
-            <AlertCard
-              key={item.id}
-              item={item}
-              seatIds={seatIds}
-              resolution={resolved.get(item.id) ?? null}
-              dispatchedTo={dispatched.get(item.id) ?? null}
-              acknowledgedBy={acknowledged.get(item.id) ?? null}
-              onResolve={handleResolve}
-              onDispatch={handleDispatch}
-              onAcknowledge={handleAcknowledge}
-              onViewEvidence={onViewEvidence}
-              onAlertClick={onAlertClick}
-            />
-          ))}
-        </AnimatePresence>
+        <AnimatePresence initial={false}>{reviewItems.map(renderCard)}</AnimatePresence>
       </div>
+
+      {loggedItems.length > 0 && (
+        <div>
+          <button
+            onClick={() => setShowLogged((s) => !s)}
+            className="flex items-center gap-1.5 text-[10px] mono uppercase tracking-widest text-white/35 hover:text-white/60 mb-2"
+          >
+            <ChevronDown size={11} className={showLogged ? 'rotate-180' : ''} />
+            logged, no action needed ({loggedItems.length})
+          </button>
+          {showLogged && (
+            <div className="rounded-2xl border border-white/8 p-3 flex flex-col gap-2 opacity-70">
+              <AnimatePresence initial={false}>{loggedItems.map(renderCard)}</AnimatePresence>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }

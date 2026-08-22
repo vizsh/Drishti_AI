@@ -7,6 +7,7 @@ Run: uvicorn backend.main:app --reload --port 8000
 from __future__ import annotations
 
 import asyncio
+import logging
 import queue
 import time
 from pathlib import Path
@@ -35,6 +36,7 @@ from backend.report import generate_session_report_pdf
 from calibration.blind_spot_tracker import LiveBlindSpotTracker
 from calibration.coverage import CameraCoverageInput, validate_coverage
 from calibration.room_scan import RoomScanSession
+from backend.retention import DEFAULT_RETENTION_DAYS, MAX_RETENTION_DAYS, MIN_RETENTION_DAYS, run_retention_sweep
 
 app = FastAPI(title="KINESIS AI")
 
@@ -104,6 +106,20 @@ _workers_lock = asyncio.Lock()
 # mid-session camera reconfiguration doesn't silently reset it to "mixed".
 current_exam_type: str = "mixed"
 
+# Product audit (2026-08-22): current session's alert-sensitivity preset —
+# same re-apply-on-restart pattern as current_exam_type above, so a
+# mid-session camera reconfiguration doesn't silently reset it to "strict".
+current_sensitivity: str = "strict"
+
+# Product audit (2026-08-22): how many days of evidence clips and event-log
+# rows the system keeps before the retention sweep deletes them. Not
+# persisted across a full process restart (in-memory only, like
+# current_exam_type) -- a real deployment would want this in
+# config/deployment.json alongside the other per-institution settings;
+# tracked here for now so the enforcement mechanism itself is real and
+# testable without also building institution-level config persistence.
+current_retention_days: int = DEFAULT_RETENTION_DAYS
+
 # Part 1a (2026-08-21): the currently-active live blind-spot-analysis
 # window, if any. Set by /api/setup/blind-spot-analysis while it runs, None
 # otherwise — record_seat_observation() below is wired into every worker at
@@ -172,6 +188,7 @@ def _start_workers() -> None:
             on_seat_detection=record_seat_detection,
         )
         w.risk_engine.apply_profile(current_exam_type)
+        w.apply_sensitivity(current_sensitivity)
         workers.append(w)
         camera_to_worker[w.camera_id] = w
         for seat_id in w.seat_cal.seats:
@@ -184,6 +201,20 @@ def _stop_workers() -> None:
         w.stop()
 
 
+async def _retention_sweep_loop() -> None:
+    """Product audit (2026-08-22): runs the retention sweep once at boot
+    (so a demo/small deployment doesn't wait 24h to see it work) and then
+    daily. A sweep failure logs and retries next cycle rather than
+    crashing the loop -- retention enforcement going quiet shouldn't take
+    the whole backend down with it."""
+    while True:
+        try:
+            await asyncio.to_thread(run_retention_sweep, current_retention_days)
+        except Exception:
+            logging.getLogger(__name__).exception("Retention sweep failed")
+        await asyncio.sleep(86400)
+
+
 @app.on_event("startup")
 async def startup() -> None:
     global session_id, deployment
@@ -192,6 +223,7 @@ async def startup() -> None:
     session_id = db.create_session(deployment.primary_camera.video_path)
     _start_workers()
     asyncio.create_task(broadcast_loop())
+    asyncio.create_task(_retention_sweep_loop())
 
 
 @app.on_event("shutdown")
@@ -373,6 +405,60 @@ async def set_exam_type(body: dict, user: dict = Depends(get_current_user)) -> d
 @app.get("/api/session/exam-type")
 async def get_exam_type(user: dict = Depends(get_current_user)) -> dict:
     return {"exam_type": current_exam_type}
+
+
+@app.post("/api/session/sensitivity")
+async def set_sensitivity(body: dict, user: dict = Depends(get_current_user)) -> dict:
+    """Product audit (2026-08-22): a real, user-facing alert-sensitivity
+    control -- adjusts the same needs_verification confidence bar and
+    notify-cooldowns this session's accuracy audit already validated,
+    applied live to every running worker, no restart. "strict" (default)
+    matches the thresholds verified against ground-truth footage this
+    session; "sensitive" flags more for review and interrupts sooner, at
+    the cost of more false positives reaching the invigilator."""
+    global current_sensitivity
+    level = body.get("level", "strict")
+    if level not in ("strict", "balanced", "sensitive"):
+        level = "strict"
+    current_sensitivity = level
+    for w in workers:
+        w.apply_sensitivity(level)
+    return {"status": "ok", "level": level}
+
+
+@app.get("/api/session/sensitivity")
+async def get_sensitivity(user: dict = Depends(get_current_user)) -> dict:
+    return {"level": current_sensitivity}
+
+
+@app.get("/api/settings/retention")
+async def get_retention(user: dict = Depends(get_current_user)) -> dict:
+    return {"retention_days": current_retention_days}
+
+
+@app.post("/api/settings/retention")
+async def set_retention(body: dict, user: dict = Depends(get_current_user)) -> dict:
+    """Product audit (2026-08-22): sets how many days of evidence/event
+    history the system keeps -- the daily background sweep (see startup())
+    picks up the new value on its next cycle. Does not itself trigger an
+    immediate deletion; use POST /api/settings/retention/sweep-now for that,
+    so changing the number and accidentally deleting a lot of data are two
+    separate, deliberate actions."""
+    global current_retention_days
+    days = int(body.get("retention_days", DEFAULT_RETENTION_DAYS))
+    if not (MIN_RETENTION_DAYS <= days <= MAX_RETENTION_DAYS):
+        raise HTTPException(status_code=400, detail=f"retention_days must be between {MIN_RETENTION_DAYS} and {MAX_RETENTION_DAYS}")
+    current_retention_days = days
+    return {"status": "ok", "retention_days": days}
+
+
+@app.post("/api/settings/retention/sweep-now")
+async def sweep_retention_now(user: dict = Depends(get_current_user)) -> dict:
+    """Runs the retention sweep immediately at the current retention_days
+    setting, and reports real counts of what was deleted -- a deliberate,
+    explicit action (see set_retention's docstring), not something that
+    happens as a side effect of changing the number."""
+    return await asyncio.to_thread(run_retention_sweep, current_retention_days)
 
 
 async def broadcast_loop() -> None:

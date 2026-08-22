@@ -49,6 +49,23 @@ FINE_TUNED_WEIGHTS = Path("data/weights/phone_detector_v1.pt")
 # occasional thumbnail, not a smooth feed, and this is what keeps
 # multiple cameras streaming at once cheap.
 BACKGROUND_STREAM_EVERY_N_FRAMES = 20
+
+# Product audit (2026-08-22): a real, user-facing sensitivity control --
+# reference request, KEYFRAME mockup's "Alert sensitivity: Sustained
+# pattern only" slider with the note "single glances and brief stretches
+# are absorbed into baseline and never reach this queue." Three presets
+# over constants that already exist and already do exactly that job
+# (risk_engine.scorer.RiskEngine.object_alert_high_confidence gates the
+# needs_verification tier; the notify-cooldowns gate repeat interruptions)
+# -- not a new mechanism, just making the existing one adjustable instead
+# of hardcoded. "sensitive" lowers the confidence bar (flags more for
+# review) and shortens cooldowns (interrupts sooner); "strict" is the
+# calmer, default end matching this session's own validated thresholds.
+SENSITIVITY_PRESETS: dict[str, dict[str, float]] = {
+    "strict": {"object_alert_high_confidence": 0.5, "notify_cooldown_s": 60.0, "gesture_notify_cooldown_s": 120.0},
+    "balanced": {"object_alert_high_confidence": 0.4, "notify_cooldown_s": 45.0, "gesture_notify_cooldown_s": 90.0},
+    "sensitive": {"object_alert_high_confidence": 0.3, "notify_cooldown_s": 30.0, "gesture_notify_cooldown_s": 45.0},
+}
 # Accuracy audit (2026-08-22): which detected LABELS are trustworthy enough
 # to stand as an alert's sole corroboration -- a per-class distinction, not
 # a per-model one (see risk_engine/adjudication.py's object_class_verified
@@ -310,6 +327,21 @@ class PipelineWorker(threading.Thread):
         self._seat_alert_counts: dict[str, int] = {}
         self._notify_cooldown_s = 60.0
 
+        # Product audit (2026-08-22): gesture_alert used to toast/sound at
+        # full priority on its very FIRST occurrence, with none of the
+        # gates "alert" events go through -- no cooldown, no pattern
+        # requirement. A wrist crossing into a neighbour's zone once is
+        # exactly the "ordinary movement" case the whole accuracy audit
+        # exists to filter out; it's the repeat-detector's job (behaviour/
+        # gestures.py's likely_calibration_issue) to say whether this is a
+        # pattern worth a human's attention, not the first occurrence
+        # alone. A separate, longer cooldown (120s, matching the
+        # calibration-warning window) means a genuinely repeating gesture
+        # still surfaces, just not as N identical interruptions.
+        self._last_gesture_notify_time: dict[str, float] = {}
+        self._seat_gesture_counts: dict[str, int] = {}
+        self._gesture_notify_cooldown_s = 120.0
+
     def stop(self) -> None:
         self._stop_event.set()
         for cam in self.secondary_cameras:
@@ -323,6 +355,17 @@ class PipelineWorker(threading.Thread):
         if mode not in ("off", "background", "focused"):
             raise ValueError(f"invalid stream mode: {mode!r}")
         self.stream_mode = mode
+
+    def apply_sensitivity(self, level: str) -> None:
+        """Product audit (2026-08-22): applies one of SENSITIVITY_PRESETS
+        in place -- adjusts the SAME real thresholds already governing
+        needs_verification and notify-cooldowns, doesn't add a second
+        parallel mechanism. Keeps in-progress calibration/detector state
+        untouched, same pattern as RiskEngine.apply_profile()."""
+        preset = SENSITIVITY_PRESETS.get(level, SENSITIVITY_PRESETS["strict"])
+        self.risk_engine.object_alert_high_confidence = preset["object_alert_high_confidence"]
+        self._notify_cooldown_s = preset["notify_cooldown_s"]
+        self._gesture_notify_cooldown_s = preset["gesture_notify_cooldown_s"]
 
     def dismiss_alert(self, seat_id: str) -> None:
         """docs/architecture.md §10 feedback loop, wired to a real endpoint.
@@ -596,6 +639,26 @@ class PipelineWorker(threading.Thread):
                             # above regardless - only the actionable event
                             # (alert feed / evidence / dispatch) is gated.
                             if self._alerting_enabled():
+                                self._seat_gesture_counts[seat_id] = self._seat_gesture_counts.get(seat_id, 0) + 1
+                                last_gesture_notify = self._last_gesture_notify_time.get(seat_id, -1e9)
+                                # Product audit (2026-08-22): a single
+                                # hand-reach is exactly the ambiguous "could
+                                # be an innocent stretch" case named in this
+                                # session's own reference design (KEYFRAME
+                                # mockup: "single glances... absorbed into
+                                # baseline and never reach this queue") --
+                                # unlike an "alert" event, a lone gesture
+                                # has passed no corroboration/adjudication
+                                # gate at all, so the cooldown alone isn't
+                                # enough; occurrence 1 never notifies,
+                                # occurrence 2+ (a real pattern starting)
+                                # can, still subject to the cooldown.
+                                gesture_notify = (
+                                    self._seat_gesture_counts[seat_id] >= 2
+                                    and (sim_time - last_gesture_notify) >= self._gesture_notify_cooldown_s
+                                )
+                                if gesture_notify:
+                                    self._last_gesture_notify_time[seat_id] = sim_time
                                 self.event_queue.put(
                                     {
                                         "type": "gesture_alert",
@@ -603,6 +666,12 @@ class PipelineWorker(threading.Thread):
                                         "timestamp": sim_time,
                                         "gesture": gesture_event.gesture,
                                         "explanation": explain_gesture(gesture_event),
+                                        # Product audit (2026-08-22): same
+                                        # notify semantics as "alert" events
+                                        # -- always logged, only interrupts
+                                        # the invigilator once per cooldown.
+                                        "notify": gesture_notify,
+                                        "occurrence": self._seat_gesture_counts[seat_id],
                                     }
                                 )
 

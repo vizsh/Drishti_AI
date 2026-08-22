@@ -128,6 +128,8 @@ export function useLiveSocket() {
               seatId: ev.seat_id!,
               timestamp: ev.timestamp ?? 0,
               explanation: ev.explanation ?? '',
+              notify: ev.notify,
+              occurrence: ev.occurrence,
             },
             ...prev,
           ].slice(0, 60))

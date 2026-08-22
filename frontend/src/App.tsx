@@ -5,7 +5,6 @@ import { RequireAuth } from './components/RequireAuth'
 import { AppLayout } from './layouts/AppLayout'
 import { LoginPage } from './pages/LoginPage'
 import { OverviewPage } from './pages/OverviewPage'
-import { CommandCenterPage } from './pages/CommandCenterPage'
 import { DashboardPage } from './pages/DashboardPage'
 import { SeatDetailPage } from './pages/SeatDetailPage'
 import { DigitalTwinPage } from './pages/DigitalTwinPage'
@@ -44,10 +43,14 @@ export default function App() {
                 </RequireAuth>
               }
             >
-              <Route index element={<Navigate to="/command-center" replace />} />
-              <Route path="/command-center" element={<CommandCenterPage />} />
+              <Route index element={<Navigate to="/dashboard" replace />} />
+              {/* Product audit (2026-08-22): Command Center retired -- it was
+                  a strictly worse version of Dashboard (one hardcoded live
+                  feed, no real per-tile alert text) now that Dashboard does
+                  the same job properly. Old links redirect rather than 404. */}
+              <Route path="/command-center" element={<Navigate to="/dashboard" replace />} />
               <Route path="/dashboard" element={<DashboardPage />} />
-              <Route path="/live" element={<Navigate to="/command-center" replace />} />
+              <Route path="/live" element={<Navigate to="/dashboard" replace />} />
               <Route path="/overview" element={<OverviewPage />} />
               <Route path="/seat/:seatId" element={<SeatDetailPage />} />
               <Route path="/twin/:seatId" element={<DigitalTwinPage />} />
@@ -57,7 +60,7 @@ export default function App() {
               <Route path="/settings" element={<SettingsPage />} />
               <Route path="/trust" element={<TrustCompliancePage />} />
               <Route path="/lab-setup" element={<LabSetupPage />} />
-              <Route path="*" element={<Navigate to="/command-center" replace />} />
+              <Route path="*" element={<Navigate to="/dashboard" replace />} />
             </Route>
           </Routes>
         </LiveProvider>

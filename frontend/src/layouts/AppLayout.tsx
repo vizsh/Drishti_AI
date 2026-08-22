@@ -4,6 +4,7 @@ import { Header } from '../components/Header'
 import { StatStrip } from '../components/StatStrip'
 import { Sidebar } from '../components/Sidebar'
 import { ToastLayer } from '../components/ToastLayer'
+import { DisclosureBanner } from '../components/DisclosureBanner'
 import { useLive } from '../state/LiveContext'
 import { useHallScope } from '../state/useHallScope'
 
@@ -41,6 +42,7 @@ export function AppLayout() {
         <div className="max-w-[1500px] mx-auto">
           <Header connected={connected} cameraOnline={cameraOnline} />
           <StatStrip seatsMonitored={seatIds.length} calibrated={calibratedCount} alerts={sessionAlerts} avgRisk={avgRisk} />
+          <DisclosureBanner />
           <Outlet />
           <footer className="mt-10 pb-10 text-center text-[11px] mono text-white/25">
             identity is seat-anchored, not face-based · risk scored against each student's own calibrated baseline · illustrative seat calibration for demo

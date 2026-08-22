@@ -15,7 +15,12 @@ interface Props {
   alerts: AlertItem[]
   feedback: string[]
   seatIds: string[]
-  onDismiss: (seatId: string, resolution?: Resolution, invigilator?: string) => Promise<void>
+  onDismiss: (
+    seatId: string,
+    resolution?: Resolution,
+    invigilator?: string,
+    signal?: { signalType: string; objectLabel?: string; confidence?: number }
+  ) => Promise<void>
   onDispatch?: (seatId: string, invigilator: string) => Promise<void>
   onAcknowledge?: (seatId: string, invigilator: string) => Promise<void>
   onViewEvidence: (url: string) => void
@@ -55,7 +60,16 @@ export function AlertFeed({ alerts, feedback, seatIds, onDismiss, onDispatch, on
 
   const handleResolve = async (item: AlertItem, resolution: Resolution, invigilator?: string) => {
     setResolved((prev) => new Map(prev).set(item.id, resolution))
-    await onDismiss(item.seatId, resolution, invigilator)
+    // Product audit §7.1: label WHICH kind of signal this resolution is
+    // actually about, so "false alarm" on a moderate-confidence object hit
+    // and "false alarm" on a sustained-posture alert become distinguishable
+    // rows in the training-feedback table instead of identical text.
+    const signalType = item.kind === 'gesture' ? 'gesture' : item.kind === 'calibration_warning' ? 'calibration' : item.objectLabel ? 'object' : 'behavioral'
+    await onDismiss(item.seatId, resolution, invigilator, {
+      signalType,
+      objectLabel: item.objectLabel ?? undefined,
+      confidence: item.confidence,
+    })
   }
 
   const handleDispatch = async (item: AlertItem, invigilator: string) => {

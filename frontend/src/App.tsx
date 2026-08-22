@@ -6,6 +6,7 @@ import { AppLayout } from './layouts/AppLayout'
 import { LoginPage } from './pages/LoginPage'
 import { OverviewPage } from './pages/OverviewPage'
 import { DashboardPage } from './pages/DashboardPage'
+import { CameraDetailPage } from './pages/CameraDetailPage'
 import { SeatDetailPage } from './pages/SeatDetailPage'
 import { DigitalTwinPage } from './pages/DigitalTwinPage'
 import { AlertsPage } from './pages/AlertsPage'
@@ -50,6 +51,7 @@ export default function App() {
                   the same job properly. Old links redirect rather than 404. */}
               <Route path="/command-center" element={<Navigate to="/dashboard" replace />} />
               <Route path="/dashboard" element={<DashboardPage />} />
+              <Route path="/camera/:cameraId" element={<CameraDetailPage />} />
               <Route path="/live" element={<Navigate to="/dashboard" replace />} />
               <Route path="/overview" element={<OverviewPage />} />
               <Route path="/seat/:seatId" element={<SeatDetailPage />} />

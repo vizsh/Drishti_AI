@@ -98,6 +98,87 @@ class EventLog(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
 
 
+class FeedbackLabel(Base):
+    """Product audit &sect;7.1 (2026-08-22): every alert resolution an
+    invigilator already makes (false_alarm/confirmed/no_action) is a real
+    three-way human label over a specific signal. Before this, that label
+    only ever fed back into widening one seat's baseline threshold and was
+    otherwise discarded — a year of real exam sessions run that way
+    produces zero structured training data. This table persists the label
+    itself: which kind of signal fired, at what confidence, and what a
+    human said really happened — the same shape of row the roadmap's
+    ST-GCN++ classifier and object-detector v2 retraining will eventually
+    consume, available starting now instead of only once those exist."""
+
+    __tablename__ = "feedback_labels"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    session_id: Mapped[int] = mapped_column(Integer, index=True)
+    seat_id: Mapped[str] = mapped_column(String(50), index=True)
+    signal_type: Mapped[str] = mapped_column(String(30), index=True)  # object|posture|motion|gesture
+    object_label: Mapped[Optional[str]] = mapped_column(String(50), nullable=True)
+    confidence: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
+    resolution: Mapped[str] = mapped_column(String(20), index=True)  # false_alarm|confirmed|no_action
+    invigilator: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+
+
+def log_feedback_label(
+    session_id: int,
+    seat_id: str,
+    signal_type: str,
+    resolution: str,
+    object_label: Optional[str] = None,
+    confidence: Optional[float] = None,
+    invigilator: Optional[str] = None,
+) -> None:
+    with SessionLocal() as db:
+        db.add(
+            FeedbackLabel(
+                session_id=session_id,
+                seat_id=seat_id,
+                signal_type=signal_type,
+                object_label=object_label,
+                confidence=confidence,
+                resolution=resolution,
+                invigilator=invigilator,
+            )
+        )
+        db.commit()
+
+
+def feedback_label_summary() -> dict:
+    """Tally used by Analytics to show a real, growing count of structured
+    human labels — the concrete "every hour of use produces more training
+    data" claim, not a promise."""
+    with SessionLocal() as db:
+        total = db.execute(select(func.count()).select_from(FeedbackLabel)).scalar() or 0
+        by_resolution = dict(
+            db.execute(select(FeedbackLabel.resolution, func.count()).group_by(FeedbackLabel.resolution)).all()
+        )
+        by_signal = dict(
+            db.execute(select(FeedbackLabel.signal_type, func.count()).group_by(FeedbackLabel.signal_type)).all()
+        )
+        recent_rows = db.execute(
+            select(FeedbackLabel).order_by(FeedbackLabel.id.desc()).limit(20)
+        ).scalars().all()
+        return {
+            "total_labels": int(total),
+            "by_resolution": by_resolution,
+            "by_signal_type": by_signal,
+            "recent": [
+                {
+                    "seat_id": r.seat_id,
+                    "signal_type": r.signal_type,
+                    "object_label": r.object_label,
+                    "confidence": r.confidence,
+                    "resolution": r.resolution,
+                    "created_at": r.created_at.isoformat() if r.created_at else None,
+                }
+                for r in recent_rows
+            ],
+        }
+
+
 def init_db() -> None:
     Base.metadata.create_all(engine)
 

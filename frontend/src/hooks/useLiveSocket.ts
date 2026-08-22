@@ -182,11 +182,22 @@ export function useLiveSocket() {
     }
   }, [flashSeat])
 
-  const dismissAlert = useCallback(async (seatId: string, resolution: string = 'false_alarm', invigilator?: string) => {
+  const dismissAlert = useCallback(async (
+    seatId: string,
+    resolution: string = 'false_alarm',
+    invigilator?: string,
+    signal?: { signalType: string; objectLabel?: string; confidence?: number }
+  ) => {
     await fetch(`/api/alerts/${seatId}/dismiss`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ resolution, invigilator }),
+      body: JSON.stringify({
+        resolution,
+        invigilator,
+        signal_type: signal?.signalType,
+        object_label: signal?.objectLabel,
+        confidence: signal?.confidence,
+      }),
     })
   }, [])
 

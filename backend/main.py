@@ -584,13 +584,41 @@ async def dismiss_alert(seat_id: str, body: dict | None = None, user: dict = Dep
     second, disconnected mechanism — same worker method, same feedback-loop
     event path. body: {"resolution": "false_alarm"|"confirmed"|"no_action",
     "invigilator": str | null}. Missing body/resolution defaults to
-    false_alarm, preserving the original one-click dismiss behaviour."""
+    false_alarm, preserving the original one-click dismiss behaviour.
+
+    Product audit §7.1 (2026-08-22): also accepts optional signal_type/
+    object_label/confidence describing WHICH alert this resolution was
+    about (the frontend already has this on the AlertItem being resolved)
+    and persists it as a structured FeedbackLabel row — the same three-way
+    human label this endpoint already produced, but now durable and
+    queryable instead of only ever feeding the baseline-widening side
+    effect below."""
     resolution = (body or {}).get("resolution", "false_alarm")
     invigilator = (body or {}).get("invigilator")
+    signal_type = (body or {}).get("signal_type")
     w = _worker_for_seat(seat_id)
     if w is not None:
         w.resolve_alert(seat_id, resolution, invigilator)
+    if signal_type and session_id is not None:
+        await asyncio.to_thread(
+            db.log_feedback_label,
+            session_id,
+            seat_id,
+            signal_type,
+            resolution,
+            (body or {}).get("object_label"),
+            (body or {}).get("confidence"),
+            invigilator,
+        )
     return {"status": "ok", "seat_id": seat_id, "resolution": resolution}
+
+
+@app.get("/api/analytics/feedback-labels")
+async def get_feedback_labels(user: dict = Depends(get_current_user)) -> dict:
+    """Product audit §7.1: the concrete, growing count of structured human
+    labels this deployment has produced — what Analytics shows to make
+    "every hour of use makes the next model better" a number, not a claim."""
+    return await asyncio.to_thread(db.feedback_label_summary)
 
 
 @app.post("/api/alerts/{seat_id}/acknowledge")

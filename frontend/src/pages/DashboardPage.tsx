@@ -66,9 +66,12 @@ export function DashboardPage() {
   }, [alerts])
 
   function openCamera(cam: CameraInfo) {
-    const sev = severityForCamera(cam, seats)
-    const targetSeat = sev.worstSeat ?? cam.seats[0]
-    if (targetSeat) navigate(`/seat/${targetSeat}`)
+    // Product audit §7.2: a tile used to jump straight past the camera
+    // entirely to one seat's telemetry, with no way to actually watch the
+    // footage. Now it opens the camera's own detail view (real video next
+    // to the same analytics) — a specific seat is still one click away
+    // from there via the alert feed.
+    navigate(`/camera/${cam.camera_id}`)
   }
 
   if (cameras.length === 0) {

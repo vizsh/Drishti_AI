@@ -685,9 +685,14 @@ async def get_events(
 ) -> dict:
     """PS #1 objective: "event logs for invigilator review" — persisted,
     filterable, survives a page refresh or server restart (unlike the
-    in-memory alert feed alone)."""
+    in-memory alert feed alone). seat_id accepts a comma-separated list
+    (efficiency pass, 2026-08-23) so a caller covering multiple seats —
+    e.g. a camera's own history on CameraDetailPage — can fetch them in one
+    request instead of one per seat; a single id keeps working unchanged."""
     sid = None if all_sessions else session_id
-    events = await asyncio.to_thread(db.query_events, sid, seat_id, event_type, search, limit)
+    seat_ids = seat_id.split(",") if seat_id and "," in seat_id else None
+    single_seat_id = None if seat_ids else seat_id
+    events = await asyncio.to_thread(db.query_events, sid, single_seat_id, event_type, search, limit, seat_ids)
     return {"events": events, "session_id": session_id}
 
 

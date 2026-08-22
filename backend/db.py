@@ -226,12 +226,22 @@ def query_events(
     event_type: Optional[str] = None,
     search: Optional[str] = None,
     limit: int = 200,
+    seat_ids: Optional[list[str]] = None,
 ) -> list[dict]:
+    """seat_ids (2026-08-23, efficiency pass): lets a caller with multiple
+    seats to cover (e.g. the camera detail view's own alert history) get
+    them in one query instead of N sequential ones — CameraDetailPage.tsx
+    used to Promise.all one /api/events fetch per seat on this camera,
+    which is N round trips and N SQLite queries for what's really one
+    filter. seat_id (singular) is untouched for existing single-seat
+    callers like SeatDetailPage."""
     with SessionLocal() as db:
         stmt = select(EventLog).order_by(EventLog.id.desc()).limit(limit)
         if session_id is not None:
             stmt = stmt.where(EventLog.session_id == session_id)
-        if seat_id:
+        if seat_ids:
+            stmt = stmt.where(EventLog.seat_id.in_(seat_ids))
+        elif seat_id:
             stmt = stmt.where(EventLog.seat_id == seat_id)
         if event_type:
             stmt = stmt.where(EventLog.event_type == event_type)

@@ -53,14 +53,16 @@ export function CameraDetailPage() {
   }, [cameraId, cam?.has_own_worker])
 
   useEffect(() => {
-    if (!cam) return
-    Promise.all(
-      cam.seats.map((s) => fetch(`/api/events?seat_id=${s}&limit=50`).then((r) => r.json()))
-    ).then((results) => {
-      const merged = results.flatMap((d) => d.events as EventRow[])
-      merged.sort((a, b) => b.sim_time - a.sim_time)
-      setHistory(merged.filter((e) => e.event_type !== 'telemetry'))
-    })
+    if (!cam || cam.seats.length === 0) return
+    // Efficiency pass (2026-08-23): one batched request for every seat on
+    // this camera instead of one fetch per seat (backend/main.py's
+    // /api/events now accepts a comma-separated seat_id list).
+    fetch(`/api/events?seat_id=${cam.seats.join(',')}&limit=${50 * cam.seats.length}`)
+      .then((r) => r.json())
+      .then((d) => {
+        const merged = (d.events as EventRow[]).slice().sort((a, b) => b.sim_time - a.sim_time)
+        setHistory(merged.filter((e) => e.event_type !== 'telemetry'))
+      })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [cam?.camera_id, cam?.seats.join(',')])
 

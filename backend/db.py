@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
 
-from sqlalchemy import DateTime, Float, Integer, String, Text, create_engine, func, select
+from sqlalchemy import DateTime, Float, Integer, String, Text, create_engine, delete, func, select
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
 DB_PATH = Path("data/db/kinesis.db")
@@ -308,6 +308,46 @@ def latest_patrol_checkins() -> list[dict]:
             {"hall": r.hall, "invigilator": r.invigilator, "checked_in_at": r.checked_in_at.isoformat()}
             for r in latest_by_hall.values()
         ]
+
+
+class SeatAssignment(Base):
+    """Seating chart upload + occupancy mismatch detection (2026-08-23):
+    an institution's own record of which seat SHOULD have which
+    student — occupant_label is free-text record-keeping (a roll number
+    or name), never tied to a face embedding or used for detection
+    itself (identity stays seat-anchored, per this project's non-
+    negotiable no-face-recognition rule). The mismatch check this feeds
+    is a real comparison layer over data already computed: does this
+    assigned seat actually show a calibrated (real, detected) occupant,
+    and is any calibrated seat occupied that ISN'T on the chart at all."""
+
+    __tablename__ = "seat_assignments"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    session_id: Mapped[int] = mapped_column(Integer, index=True)
+    seat_id: Mapped[str] = mapped_column(String(50), index=True)
+    occupant_label: Mapped[str] = mapped_column(String(200))
+
+
+def save_seating_chart(session_id: int, assignments: list[dict]) -> int:
+    """Replaces this session's entire seating chart with the uploaded
+    one — a re-upload means "this is the correct chart now," not "add to
+    the old one," matching how re-saving Lab Setup's camera config works."""
+    with SessionLocal() as db:
+        db.execute(delete(SeatAssignment).where(SeatAssignment.session_id == session_id))
+        rows = [
+            SeatAssignment(session_id=session_id, seat_id=a["seat_id"], occupant_label=a["occupant_label"])
+            for a in assignments
+            if a.get("seat_id") and a.get("occupant_label")
+        ]
+        db.add_all(rows)
+        db.commit()
+        return len(rows)
+
+
+def get_seating_chart(session_id: int) -> list[dict]:
+    with SessionLocal() as db:
+        rows = db.execute(select(SeatAssignment).where(SeatAssignment.session_id == session_id)).scalars().all()
+        return [{"seat_id": r.seat_id, "occupant_label": r.occupant_label} for r in rows]
 
 
 def init_db() -> None:

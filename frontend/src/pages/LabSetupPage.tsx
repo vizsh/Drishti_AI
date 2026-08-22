@@ -5,6 +5,7 @@ import { ExamTypeSelector } from '../components/ExamTypeSelector'
 import { RoomScanOverlay } from '../components/RoomScanOverlay'
 import { ClassroomDigitalTwin } from '../components/ClassroomDigitalTwin'
 import { HallDigitalTwinGrid } from '../components/HallDigitalTwinGrid'
+import { SeatingChartUpload } from '../components/SeatingChartUpload'
 import { useHallScope } from '../state/useHallScope'
 import { STATUS_COLOR } from '../lib/colors'
 
@@ -423,6 +424,8 @@ export function LabSetupPage() {
         )}
         {error && <span className="text-xs text-critical">{error}</span>}
       </div>
+
+      <SeatingChartUpload />
 
       {deployedCameras.length > 0 && (
         <div className="rounded-2xl border border-white/8 p-5 mb-6" style={{ background: 'linear-gradient(180deg, #ffffff06, #ffffff01)' }}>

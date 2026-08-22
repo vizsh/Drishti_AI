@@ -500,6 +500,29 @@ async def get_exam_duration(user: dict = Depends(get_current_user)) -> dict:
     return {"minutes": current_exam_duration_minutes}
 
 
+@app.post("/api/seating-chart")
+async def upload_seating_chart(body: dict, user: dict = Depends(get_current_user)) -> dict:
+    """Seating chart upload (2026-08-23): body {"assignments": [{"seat_id":
+    str, "occupant_label": str}, ...]}. occupant_label is free-text
+    record-keeping (roll number/name) — never used for detection, identity
+    stays seat-anchored. Replaces this session's chart entirely; the real
+    occupancy-mismatch comparison happens client-side against the same
+    live seat state every other view already reads (db.py's
+    save_seating_chart docstring explains why)."""
+    if session_id is None:
+        raise HTTPException(status_code=400, detail="no active session")
+    assignments = body.get("assignments", [])
+    saved = await asyncio.to_thread(db.save_seating_chart, session_id, assignments)
+    return {"status": "ok", "saved": saved}
+
+
+@app.get("/api/seating-chart")
+async def get_seating_chart_endpoint(user: dict = Depends(get_current_user)) -> dict:
+    if session_id is None:
+        return {"assignments": []}
+    return {"assignments": await asyncio.to_thread(db.get_seating_chart, session_id)}
+
+
 @app.post("/api/patrol/check-in")
 async def patrol_check_in(body: dict, user: dict = Depends(get_current_user)) -> dict:
     """Invigilator presence tracking (2026-08-23): a manual, low-friction

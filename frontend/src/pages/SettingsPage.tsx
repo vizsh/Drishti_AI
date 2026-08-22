@@ -4,6 +4,7 @@ import { Settings as SettingsIcon, ShieldCheck, ChevronRight, PlayCircle, Volume
 import { useAuth, DEMO_ACCOUNTS } from '../state/AuthContext'
 import { ExamTypeSelector } from '../components/ExamTypeSelector'
 import { SensitivitySelector } from '../components/SensitivitySelector'
+import { ExamDurationInput } from '../components/ExamDurationInput'
 import { setAudioMuted, isAudioMuted } from '../lib/audio'
 
 export function SettingsPage() {
@@ -37,6 +38,7 @@ export function SettingsPage() {
 
       <ExamTypeSelector />
       <SensitivitySelector />
+      <ExamDurationInput />
 
       <div className="rounded-2xl border border-white/8 p-5 mb-5 max-w-lg bg-white/3">
         <h2 className="text-sm font-bold uppercase tracking-wide mb-3">Audio Alerts</h2>

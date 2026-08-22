@@ -1,16 +1,26 @@
 import { useEffect, useState, type ReactNode } from 'react'
 import { useParams, Link } from 'react-router-dom'
-import { ArrowLeft, Link2, Fingerprint, UserRoundSearch, Activity, Compass, Shield, Camera } from 'lucide-react'
+import { ArrowLeft, Link2, Fingerprint, UserRoundSearch, Activity, Compass, Shield, Camera, ScrollText } from 'lucide-react'
 import { RiskTrendChart } from '../components/RiskTrendChart'
 import { AlertFeed } from '../components/AlertFeed'
 import { EvidenceModal } from '../components/EvidenceModal'
 import { ActionDrawer } from '../components/ActionDrawer'
 import { EmptyState } from '../components/EmptyState'
+import { ExportReportButton } from '../components/ExportReportButton'
 import { useLive } from '../state/LiveContext'
 import { useHallScope } from '../state/useHallScope'
 import { STATUS_COLOR, riskLevel } from '../lib/colors'
 import { humanizeYaw, humanizeMotion, humanizeRisk, humanizeConfidence } from '../lib/humanize'
 import type { AlertItem } from '../types'
+
+interface ClipRow {
+  id: number
+  sim_time: number
+  explanation: string | null
+  evidence_url: string | null
+  confidence: number | null
+  resolution: 'confirmed' | 'false_alarm' | 'no_action' | null
+}
 
 interface EventRow {
   id: number
@@ -27,12 +37,25 @@ export function SeatDetailPage() {
   const [evidenceUrl, setEvidenceUrl] = useState<string | null>(null)
   const [history, setHistory] = useState<EventRow[]>([])
   const [drawerAlert, setDrawerAlert] = useState<AlertItem | null>(null)
+  const [clips, setClips] = useState<ClipRow[]>([])
 
   useEffect(() => {
     if (!seatId) return
     fetch(`/api/events?seat_id=${seatId}&limit=200`)
       .then((r) => r.json())
       .then((d) => setHistory(d.events.filter((e: EventRow) => e.event_type !== 'telemetry')))
+  }, [seatId])
+
+  // Dispute-resolution pull-up (2026-08-23): a student contesting a flag
+  // means "show me everything, in one place" — this seat's own real
+  // evidence clips, matched to their real resolution status the same way
+  // Evidence Vault does (backend/db.py's evidence_vault_data), scoped to
+  // just this seat via the same seat_ids filter.
+  useEffect(() => {
+    if (!seatId) return
+    fetch(`/api/evidence-vault?seat_ids=${seatId}`)
+      .then((r) => r.json())
+      .then((d) => setClips(d.clips.filter((c: ClipRow) => c.evidence_url)))
   }, [seatId])
 
   if (!seatId) return null
@@ -84,6 +107,50 @@ export function SeatDetailPage() {
             >
               <Fingerprint size={12} /> behavioural profile
             </Link>
+          </div>
+
+          {/* Dispute-resolution pull-up: everything about this student, in
+              one place, framed explicitly for the moment it's actually
+              needed — a student contests a flag, and an invigilator or
+              exam board needs the full real record, not a hunt across
+              pages. Almost entirely a packaging change over data every
+              other section on this page (and Evidence Vault) already
+              computes — see the docstrings on the two useEffects above. */}
+          <div className="rounded-2xl border border-white/10 bg-white/4 p-4 mb-6">
+            <div className="flex items-center justify-between mb-2 flex-wrap gap-2">
+              <div className="flex items-center gap-2">
+                <ScrollText size={14} className="text-white/50" />
+                <h2 className="text-sm font-bold uppercase tracking-wide">Session record — for dispute resolution</h2>
+              </div>
+              <ExportReportButton seatId={seatId} label={`export ${seatId}'s full record`} />
+            </div>
+            <p className="text-[11px] text-white/50 mb-3 max-w-2xl">
+              If this student contests a flag, this is their entire real record in one place — every signal, every
+              evidence clip, every resolution — not a claim, an export of exactly what's below.
+            </p>
+            {clips.length > 0 ? (
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5">
+                {clips.map((c) => {
+                  const badge = c.resolution === 'confirmed' ? { t: 'confirmed', color: STATUS_COLOR.critical }
+                    : c.resolution === 'false_alarm' ? { t: 'false alarm', color: STATUS_COLOR.calm }
+                    : c.resolution === 'no_action' ? { t: 'no action', color: '#8b8578' }
+                    : { t: 'awaiting review', color: '#ffffff60' }
+                  return (
+                    <button
+                      key={c.id}
+                      onClick={() => setEvidenceUrl(c.evidence_url)}
+                      className="rounded-xl border border-white/10 p-2.5 text-left hover:border-white/25 transition-colors bg-black/20"
+                    >
+                      <div className="text-[10px] mono text-white/40 mb-1">{c.sim_time.toFixed(1)}s</div>
+                      <p className="text-[10px] text-white/60 leading-snug line-clamp-2 mb-1.5">{c.explanation}</p>
+                      <span className="text-[9px] mono" style={{ color: badge.color }}>{badge.t}</span>
+                    </button>
+                  )
+                })}
+              </div>
+            ) : (
+              <p className="text-[11px] text-white/30 mono">no evidence clips for this seat yet this session</p>
+            )}
           </div>
 
           {/* Human-readable metrics — no raw z-scores in primary view */}

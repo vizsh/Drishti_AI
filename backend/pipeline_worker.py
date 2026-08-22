@@ -66,6 +66,12 @@ SENSITIVITY_PRESETS: dict[str, dict[str, float]] = {
     "balanced": {"object_alert_high_confidence": 0.4, "notify_cooldown_s": 45.0, "gesture_notify_cooldown_s": 90.0},
     "sensitive": {"object_alert_high_confidence": 0.3, "notify_cooldown_s": 30.0, "gesture_notify_cooldown_s": 45.0},
 }
+# Exam-phase-aware sensitivity: the last 10 minutes of a configured exam
+# duration widen that seat's baseline the same way a real false-alarm
+# dismissal would (BaselineCalibrator.widen_threshold) -- the submission
+# rush is a real, legitimate elevated-motion period, not a novel signal.
+FINAL_STRETCH_SECONDS = 600.0
+FINAL_STRETCH_WIDEN_FACTOR = 1.4
 # Accuracy audit (2026-08-22): which detected LABELS are trustworthy enough
 # to stand as an alert's sole corroboration -- a per-class distinction, not
 # a per-model one (see risk_engine/adjudication.py's object_class_verified
@@ -296,6 +302,9 @@ class PipelineWorker(threading.Thread):
         )
         self.object_detector_is_finetuned = False
 
+        self.exam_duration_minutes: Optional[float] = None
+        self._final_stretch_triggered: set[str] = set()
+
         self._prev_keypoints: dict[str, list[tuple[float, float]]] = {}
         self._stop_event = threading.Event()
         self._start_wall_time = 0.0
@@ -366,6 +375,31 @@ class PipelineWorker(threading.Thread):
         self.risk_engine.object_alert_high_confidence = preset["object_alert_high_confidence"]
         self._notify_cooldown_s = preset["notify_cooldown_s"]
         self._gesture_notify_cooldown_s = preset["gesture_notify_cooldown_s"]
+
+    def set_exam_duration(self, minutes: Optional[float]) -> None:
+        """Exam-phase-aware sensitivity (2026-08-23): the settling window
+        already treats the FIRST few minutes as legitimately elevated
+        (paper distribution, getting seated) by not scoring at all until
+        calibration finishes. The LAST few minutes of an exam are the same
+        kind of false-positive source and had no equivalent handling --
+        the submission rush (everyone flipping pages faster, gathering
+        belongings, moving more) is exactly the ordinary-but-elevated
+        motion this whole project exists to stop flagging. Reuses the
+        EXACT mechanism already built for the human feedback loop
+        (BaselineCalibrator.widen_threshold, used when an invigilator
+        dismisses a false alarm) rather than inventing a second, parallel
+        one -- entering the final stretch is treated as evidence the
+        SAME way a real false-alarm dismissal already is."""
+        self.exam_duration_minutes = minutes
+
+    def _check_final_stretch(self, seat_id: str, sim_time: float) -> None:
+        duration = self.exam_duration_minutes
+        if duration is None or seat_id in self._final_stretch_triggered:
+            return
+        remaining_s = duration * 60.0 - sim_time
+        if 0.0 <= remaining_s <= FINAL_STRETCH_SECONDS:
+            self.calibrator.widen_threshold(seat_id, factor=FINAL_STRETCH_WIDEN_FACTOR)
+            self._final_stretch_triggered.add(seat_id)
 
     def dismiss_alert(self, seat_id: str) -> None:
         """docs/architecture.md §10 feedback loop, wired to a real endpoint.
@@ -737,6 +771,7 @@ class PipelineWorker(threading.Thread):
                             self._draw_person(vis, p, seat_id, "calibrating", None)
                         continue
 
+                    self._check_final_stretch(seat_id, sim_time)
                     baseline = self.calibrator.baseline(seat_id)
                     yaw_z = baseline.yaw_zscore(sample.torso_yaw) if sample.torso_yaw is not None else None
                     motion_z = baseline.motion_zscore(sample.motion_magnitude)

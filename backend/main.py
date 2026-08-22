@@ -111,6 +111,14 @@ current_exam_type: str = "mixed"
 # mid-session camera reconfiguration doesn't silently reset it to "strict".
 current_sensitivity: str = "strict"
 
+# Exam-phase-aware sensitivity (2026-08-23): configured total exam length,
+# in minutes -- lets every worker widen a seat's baseline for the real
+# submission-rush motion spike in the last 10 minutes, same re-apply-on-
+# restart pattern as current_exam_type/current_sensitivity above. None
+# means "not configured," which correctly disables the phase check
+# entirely rather than guessing a duration.
+current_exam_duration_minutes: float | None = None
+
 # Product audit (2026-08-22): how many days of evidence clips and event-log
 # rows the system keeps before the retention sweep deletes them. Not
 # persisted across a full process restart (in-memory only, like
@@ -189,6 +197,7 @@ def _start_workers() -> None:
         )
         w.risk_engine.apply_profile(current_exam_type)
         w.apply_sensitivity(current_sensitivity)
+        w.set_exam_duration(current_exam_duration_minutes)
         workers.append(w)
         camera_to_worker[w.camera_id] = w
         for seat_id in w.seat_cal.seats:
@@ -467,6 +476,27 @@ async def set_sensitivity(body: dict, user: dict = Depends(get_current_user)) ->
 @app.get("/api/session/sensitivity")
 async def get_sensitivity(user: dict = Depends(get_current_user)) -> dict:
     return {"level": current_sensitivity}
+
+
+@app.post("/api/session/exam-duration")
+async def set_exam_duration(body: dict, user: dict = Depends(get_current_user)) -> dict:
+    """Exam-phase-aware sensitivity (2026-08-23): the last 10 minutes of
+    the configured duration widen each seat's baseline the same real
+    mechanism a false-alarm dismissal already uses (see
+    PipelineWorker.set_exam_duration's docstring) -- a legitimate
+    submission-rush motion spike, not a novel signal. body:
+    {"minutes": number | null} -- null/absent disables the phase check."""
+    global current_exam_duration_minutes
+    minutes = body.get("minutes")
+    current_exam_duration_minutes = float(minutes) if minutes is not None and minutes > 0 else None
+    for w in workers:
+        w.set_exam_duration(current_exam_duration_minutes)
+    return {"status": "ok", "minutes": current_exam_duration_minutes}
+
+
+@app.get("/api/session/exam-duration")
+async def get_exam_duration(user: dict = Depends(get_current_user)) -> dict:
+    return {"minutes": current_exam_duration_minutes}
 
 
 @app.get("/api/settings/retention")

@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { CoveragePanel } from '../components/CoveragePanel'
+import { PatrolStatusPanel } from '../components/PatrolStatusPanel'
 import { SeatGrid } from '../components/SeatGrid'
 import { AlertFeed } from '../components/AlertFeed'
 import { EvidenceModal } from '../components/EvidenceModal'
@@ -24,6 +25,7 @@ export function OverviewPage() {
   return (
     <div>
       <CoveragePanel />
+      <PatrolStatusPanel />
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
         <div className="lg:col-span-2">
           <h2 className="text-sm font-bold uppercase tracking-wide mb-3">Seating grid</h2>

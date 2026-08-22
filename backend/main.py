@@ -10,6 +10,7 @@ import asyncio
 import logging
 import queue
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Annotated, Optional
 
@@ -497,6 +498,37 @@ async def set_exam_duration(body: dict, user: dict = Depends(get_current_user)) 
 @app.get("/api/session/exam-duration")
 async def get_exam_duration(user: dict = Depends(get_current_user)) -> dict:
     return {"minutes": current_exam_duration_minutes}
+
+
+@app.post("/api/patrol/check-in")
+async def patrol_check_in(body: dict, user: dict = Depends(get_current_user)) -> dict:
+    """Invigilator presence tracking (2026-08-23): a manual, low-friction
+    check-in — the invigilator taps a button when they physically patrol a
+    hall. body: {"hall": str}. Invigilator name comes from the logged-in
+    user, not free text, so this can't be spoofed as someone else."""
+    hall = body.get("hall")
+    if not hall:
+        raise HTTPException(status_code=400, detail="hall is required")
+    return await asyncio.to_thread(db.log_patrol_checkin, hall, user.get("name", "unknown"))
+
+
+@app.get("/api/patrol/status")
+async def patrol_status(user: dict = Depends(get_current_user)) -> dict:
+    """Real minutes-since-last-check-in per hall — the honest complement
+    to "the AI monitors continuously": when human coverage is thin, this
+    is where that becomes visible instead of assumed."""
+    checkins = await asyncio.to_thread(db.latest_patrol_checkins)
+    # SQLite's DateTime column round-trips as naive (no tzinfo), even
+    # though the row was written with datetime.now(timezone.utc) — compare
+    # against a naive "now" in the same UTC frame rather than an
+    # aware/naive mismatch (TypeError: can't subtract offset-naive and
+    # offset-aware datetimes, caught live testing this against a real
+    # check-in).
+    now = datetime.now(timezone.utc).replace(tzinfo=None)
+    for c in checkins:
+        checked_at = datetime.fromisoformat(c["checked_in_at"])
+        c["minutes_ago"] = round((now - checked_at).total_seconds() / 60.0, 1)
+    return {"halls": checkins}
 
 
 @app.get("/api/settings/retention")

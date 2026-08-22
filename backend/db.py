@@ -271,6 +271,45 @@ def evidence_vault_data(session_id: Optional[int] = None, seat_ids: Optional[lis
         }
 
 
+class PatrolCheckIn(Base):
+    """Invigilator presence tracking (2026-08-23): a manual check-in, not a
+    wearable or location system — deliberately simple. When a hall's human
+    coverage is thin (no check-in in a while), that's exactly when the
+    AI's own coverage matters most, and it's worth being able to show
+    that honestly rather than only ever presenting the AI as a strict
+    addition on top of full human coverage."""
+
+    __tablename__ = "patrol_checkins"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    hall: Mapped[str] = mapped_column(String(100), index=True)
+    invigilator: Mapped[str] = mapped_column(String(100))
+    checked_in_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
+
+
+def log_patrol_checkin(hall: str, invigilator: str) -> dict:
+    with SessionLocal() as db:
+        row = PatrolCheckIn(hall=hall, invigilator=invigilator)
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        return {"hall": row.hall, "invigilator": row.invigilator, "checked_in_at": row.checked_in_at.isoformat()}
+
+
+def latest_patrol_checkins() -> list[dict]:
+    """Most recent check-in per hall — used to show "last patrol: Xm ago"
+    on every hall currently deployed, not just one the caller asks about."""
+    with SessionLocal() as db:
+        rows = db.execute(select(PatrolCheckIn).order_by(PatrolCheckIn.id.desc()).limit(500)).scalars().all()
+        latest_by_hall: dict[str, PatrolCheckIn] = {}
+        for r in rows:
+            if r.hall not in latest_by_hall:
+                latest_by_hall[r.hall] = r
+        return [
+            {"hall": r.hall, "invigilator": r.invigilator, "checked_in_at": r.checked_in_at.isoformat()}
+            for r in latest_by_hall.values()
+        ]
+
+
 def init_db() -> None:
     Base.metadata.create_all(engine)
     _migrate_add_missing_columns()

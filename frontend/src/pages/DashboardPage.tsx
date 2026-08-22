@@ -1,13 +1,16 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { AlertTriangle, CameraOff, ShieldCheck, Video, VideoOff, Unplug, Plug } from 'lucide-react'
+import { AlertTriangle, CameraOff, ShieldCheck, Video, VideoOff, Unplug, Plug, LayoutGrid, Grid3x3 } from 'lucide-react'
 import { useLive } from '../state/LiveContext'
 import { useHallScope, type CameraInfo } from '../state/useHallScope'
 import { severityForCamera } from '../lib/cameraSeverity'
 import { shortAlertSummary } from '../lib/shortSummary'
 import { EmptyState } from '../components/EmptyState'
+import { SeatMapTileGrid } from '../components/SeatMapTileGrid'
 import type { AlertItem } from '../types'
+
+type ViewMode = 'cameras' | 'seats'
 
 const BORDER_COLOR = { calm: '#ffffff1a', watch: '#ffb64870', critical: '#ff5a3690' } as const
 const STRIP_COLOR = { calm: '', watch: '#ffb648', critical: '#ff5a36' } as const
@@ -26,6 +29,7 @@ export function DashboardPage() {
   const { seats, alerts, feedImages, setStreamMode } = useLive()
   const { cameras, halls, refreshCameras } = useHallScope()
   const [toggling, setToggling] = useState<string | null>(null)
+  const [viewMode, setViewMode] = useState<ViewMode>('cameras')
 
   async function toggleConnection(cam: CameraInfo) {
     setToggling(cam.camera_id)
@@ -86,30 +90,55 @@ export function DashboardPage() {
 
   return (
     <div>
-      <h1 className="text-lg font-bold mb-1">Live Monitor</h1>
+      <div className="flex items-center justify-between mb-1 flex-wrap gap-3">
+        <h1 className="text-lg font-bold">Live Monitor</h1>
+        <div className="flex rounded-lg border border-white/12 overflow-hidden">
+          <button
+            onClick={() => setViewMode('cameras')}
+            className={`flex items-center gap-1.5 text-[11px] mono px-3 py-1.5 ${viewMode === 'cameras' ? 'bg-white/12 text-white' : 'text-white/50 hover:text-white/80'}`}
+          >
+            <LayoutGrid size={12} /> camera view
+          </button>
+          <button
+            onClick={() => setViewMode('seats')}
+            className={`flex items-center gap-1.5 text-[11px] mono px-3 py-1.5 border-l border-white/12 ${viewMode === 'seats' ? 'bg-white/12 text-white' : 'text-white/50 hover:text-white/80'}`}
+          >
+            <Grid3x3 size={12} /> seat map
+          </button>
+        </div>
+      </div>
       <p className="text-xs mono text-white/35 mb-6">
-        every configured camera, at a glance · click a tile for the full investigation view
+        {viewMode === 'cameras'
+          ? 'every configured camera, at a glance · click a tile for the full investigation view'
+          : 'an abstract, privacy-forward view of every seat — no video, just status · click a tile for that seat\'s history'}
       </p>
       {halls.map((hall) => {
         const hallCameras = cameras.filter((c) => c.hall === hall)
         if (hallCameras.length === 0) return null
+        const hallSeatIds = [...new Set(hallCameras.flatMap((c) => c.seats))].sort()
         return (
           <div key={hall} className="mb-8">
             <h2 className="text-sm font-bold uppercase tracking-wide mb-3 text-white/60">{hall}</h2>
-            <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-4">
-              {hallCameras.map((cam) => (
-                <DashboardTile
-                  key={cam.camera_id}
-                  cam={cam}
-                  snapshot={feedImages[cam.camera_id] ?? null}
-                  severity={severityForCamera(cam, seats)}
-                  latestAlert={cam.seats.map((s) => latestAlertBySeat.get(s)).find(Boolean) ?? null}
-                  onOpen={() => openCamera(cam)}
-                  onToggleConnection={() => toggleConnection(cam)}
-                  toggling={toggling === cam.camera_id}
-                />
-              ))}
-            </div>
+            {viewMode === 'cameras' ? (
+              <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-4">
+                {hallCameras.map((cam) => (
+                  <DashboardTile
+                    key={cam.camera_id}
+                    cam={cam}
+                    snapshot={feedImages[cam.camera_id] ?? null}
+                    severity={severityForCamera(cam, seats)}
+                    latestAlert={cam.seats.map((s) => latestAlertBySeat.get(s)).find(Boolean) ?? null}
+                    onOpen={() => openCamera(cam)}
+                    onToggleConnection={() => toggleConnection(cam)}
+                    toggling={toggling === cam.camera_id}
+                  />
+                ))}
+              </div>
+            ) : hallSeatIds.length > 0 ? (
+              <SeatMapTileGrid seatIds={hallSeatIds} seats={seats} latestAlertBySeat={latestAlertBySeat} />
+            ) : (
+              <p className="text-xs text-white/30 mono">no seats assigned to this hall's cameras yet</p>
+            )}
           </div>
         )
       })}

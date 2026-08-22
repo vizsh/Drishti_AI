@@ -187,7 +187,7 @@ export function useLiveSocket() {
     seatId: string,
     resolution: string = 'false_alarm',
     invigilator?: string,
-    signal?: { signalType: string; objectLabel?: string; confidence?: number }
+    signal?: { signalType: string; objectLabel?: string; confidence?: number; simTime?: number }
   ) => {
     await fetch(`/api/alerts/${seatId}/dismiss`, {
       method: 'POST',
@@ -198,6 +198,7 @@ export function useLiveSocket() {
         signal_type: signal?.signalType,
         object_label: signal?.objectLabel,
         confidence: signal?.confidence,
+        sim_time: signal?.simTime,
       }),
     })
   }, [])

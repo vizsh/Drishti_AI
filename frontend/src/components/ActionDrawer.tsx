@@ -37,7 +37,7 @@ interface Props {
     seatId: string,
     resolution: Resolution,
     invigilator?: string,
-    signal?: { signalType: string; objectLabel?: string; confidence?: number }
+    signal?: { signalType: string; objectLabel?: string; confidence?: number; simTime?: number }
   ) => Promise<void>
   onDispatch?: (seatId: string, invigilator: string) => Promise<void>
   onAcknowledge?: (seatId: string, invigilator: string) => Promise<void>
@@ -71,6 +71,7 @@ export function ActionDrawer({ alert, onClose, onDismiss, onDispatch, onAcknowle
       signalType,
       objectLabel: alert.objectLabel ?? undefined,
       confidence: alert.confidence,
+      simTime: alert.timestamp,
     })
   }
 

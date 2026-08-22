@@ -119,6 +119,13 @@ class FeedbackLabel(Base):
     confidence: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     resolution: Mapped[str] = mapped_column(String(20), index=True)  # false_alarm|confirmed|no_action
     invigilator: Mapped[Optional[str]] = mapped_column(String(100), nullable=True)
+    # Evidence Vault (2026-08-23): the sim_time of the specific alert this
+    # resolution was about. resolve_alert() only ever knew "this seat's
+    # currently-open alert," never a specific EventLog row id — this is
+    # what lets a caller match a resolution back to one exact evidence
+    # clip (join on seat_id + sim_time within a couple seconds) instead of
+    # only knowing a seat has SOME resolved alert somewhere.
+    sim_time: Mapped[Optional[float]] = mapped_column(Float, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=lambda: datetime.now(timezone.utc), index=True)
 
 
@@ -130,6 +137,7 @@ def log_feedback_label(
     object_label: Optional[str] = None,
     confidence: Optional[float] = None,
     invigilator: Optional[str] = None,
+    sim_time: Optional[float] = None,
 ) -> None:
     with SessionLocal() as db:
         db.add(
@@ -141,6 +149,7 @@ def log_feedback_label(
                 confidence=confidence,
                 resolution=resolution,
                 invigilator=invigilator,
+                sim_time=sim_time,
             )
         )
         db.commit()
@@ -179,8 +188,113 @@ def feedback_label_summary() -> dict:
         }
 
 
+def evidence_vault_data(session_id: Optional[int] = None, seat_ids: Optional[list[str]] = None) -> dict:
+    """Evidence Vault (2026-08-23): every clip plus its REAL resolution
+    status, matched from the FeedbackLabel table by (seat_id, sim_time
+    within 3s) — resolve_alert() only ever knew "this seat's open alert,"
+    not a specific EventLog row, so this is a best-effort real match, not
+    a guess pulled from nowhere. A clip with no matching label is
+    genuinely unresolved, not a data gap. Also returns the real summary
+    numbers the vault's new top panel shows — no number here is
+    simulated, everything is a real count/average over what's actually in
+    the database."""
+    with SessionLocal() as db:
+        clip_stmt = (
+            select(EventLog)
+            .where(EventLog.event_type == "alert", EventLog.evidence_url.isnot(None))
+            .order_by(EventLog.id.desc())
+        )
+        if session_id is not None:
+            clip_stmt = clip_stmt.where(EventLog.session_id == session_id)
+        if seat_ids:
+            clip_stmt = clip_stmt.where(EventLog.seat_id.in_(seat_ids))
+        clips = db.execute(clip_stmt).scalars().all()
+
+        label_stmt = select(FeedbackLabel)
+        if session_id is not None:
+            label_stmt = label_stmt.where(FeedbackLabel.session_id == session_id)
+        labels = db.execute(label_stmt).scalars().all()
+        labels_by_seat: dict[str, list[FeedbackLabel]] = {}
+        for lbl in labels:
+            labels_by_seat.setdefault(lbl.seat_id, []).append(lbl)
+
+        clip_rows = []
+        resolved_count = 0
+        confirmed_count = 0
+        false_alarm_count = 0
+        no_action_count = 0
+        confidences: list[float] = []
+        for c in clips:
+            match: Optional[FeedbackLabel] = None
+            candidates = labels_by_seat.get(c.seat_id, [])
+            if candidates:
+                closest = min(candidates, key=lambda lbl: abs((lbl.sim_time or 1e9) - c.sim_time))
+                if closest.sim_time is not None and abs(closest.sim_time - c.sim_time) <= 3.0:
+                    match = closest
+            resolution = match.resolution if match else None
+            if resolution:
+                resolved_count += 1
+                if resolution == "confirmed":
+                    confirmed_count += 1
+                elif resolution == "false_alarm":
+                    false_alarm_count += 1
+                elif resolution == "no_action":
+                    no_action_count += 1
+            if c.confidence is not None:
+                confidences.append(c.confidence)
+            clip_rows.append(
+                {
+                    "id": c.id,
+                    "seat_id": c.seat_id,
+                    "sim_time": c.sim_time,
+                    "explanation": c.explanation,
+                    "evidence_url": c.evidence_url,
+                    "risk_score": c.risk_score,
+                    "confidence": c.confidence,
+                    "object_label": c.object_label,
+                    "resolution": resolution,
+                }
+            )
+
+        total_labels = len(labels)
+        return {
+            "clips": clip_rows,
+            "summary": {
+                "total_clips": len(clips),
+                "reviewed_count": resolved_count,
+                "confirmed_count": confirmed_count,
+                "false_alarm_count": false_alarm_count,
+                "no_action_count": no_action_count,
+                "avg_confidence": round(sum(confidences) / len(confidences), 3) if confidences else None,
+                "training_labels_count": total_labels,
+            },
+        }
+
+
 def init_db() -> None:
     Base.metadata.create_all(engine)
+    _migrate_add_missing_columns()
+
+
+def _migrate_add_missing_columns() -> None:
+    """create_all() only creates tables that don't exist yet — it never
+    alters an existing table's columns. feedback_labels was created
+    earlier this same session (before sim_time was added to the model),
+    so a fresh restart against the same data/db/kinesis.db file crashed
+    every read/write of that table with "no such column: sim_time". This
+    is a lightweight, idempotent ADD COLUMN pass for exactly that gap,
+    not a general migration framework — fine for this project's SQLite
+    dev/demo scale, not what a Postgres production deployment should
+    still be using by then."""
+    from sqlalchemy import inspect, text
+
+    inspector = inspect(engine)
+    if "feedback_labels" not in inspector.get_table_names():
+        return
+    existing_cols = {c["name"] for c in inspector.get_columns("feedback_labels")}
+    if "sim_time" not in existing_cols:
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE feedback_labels ADD COLUMN sim_time FLOAT"))
 
 
 def create_session(video_source: str) -> int:

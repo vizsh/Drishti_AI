@@ -638,6 +638,7 @@ async def dismiss_alert(seat_id: str, body: dict | None = None, user: dict = Dep
             (body or {}).get("object_label"),
             (body or {}).get("confidence"),
             invigilator,
+            (body or {}).get("sim_time"),
         )
     return {"status": "ok", "seat_id": seat_id, "resolution": resolution}
 
@@ -648,6 +649,17 @@ async def get_feedback_labels(user: dict = Depends(get_current_user)) -> dict:
     labels this deployment has produced — what Analytics shows to make
     "every hour of use makes the next model better" a number, not a claim."""
     return await asyncio.to_thread(db.feedback_label_summary)
+
+
+@app.get("/api/evidence-vault")
+async def get_evidence_vault(seat_ids: str | None = None, user: dict = Depends(get_current_user)) -> dict:
+    """Evidence Vault redesign (2026-08-23): every clip with its real
+    resolution status (matched from FeedbackLabel by seat+time, see
+    db.evidence_vault_data's docstring) plus the real summary numbers the
+    vault's new top panel shows. seat_ids: optional comma-separated
+    hall-scoping filter, same convention as /api/analytics."""
+    scoped = seat_ids.split(",") if seat_ids else None
+    return await asyncio.to_thread(db.evidence_vault_data, session_id, scoped)
 
 
 @app.post("/api/alerts/{seat_id}/acknowledge")

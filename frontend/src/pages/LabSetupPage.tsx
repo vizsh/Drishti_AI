@@ -6,6 +6,7 @@ import { RoomScanOverlay } from '../components/RoomScanOverlay'
 import { ClassroomDigitalTwin } from '../components/ClassroomDigitalTwin'
 import { HallDigitalTwinGrid } from '../components/HallDigitalTwinGrid'
 import { useHallScope } from '../state/useHallScope'
+import { STATUS_COLOR } from '../lib/colors'
 
 interface SeatEntry {
   seatId: string
@@ -527,7 +528,13 @@ export function LabSetupPage() {
                 <>
                   <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 mb-3">
                     {blindSpot.seats.map((s) => {
-                      const color = s.status === 'seen_by_both' ? '#8dff9e' : s.status === 'seen_by_one' ? '#ffb020' : '#ff5a36'
+                      // One-urgency-color audit (2026-08-23): was '#ffb020', a
+                      // near-duplicate of STATUS_COLOR.watch ('#ffb648') that
+                      // drifted from it independently — same meaning, slightly
+                      // different hue, exactly the kind of stacked-signal
+                      // inconsistency the product audit's color rule exists
+                      // to catch. Unified to the real watch color.
+                      const color = s.status === 'seen_by_both' ? STATUS_COLOR.calm : s.status === 'seen_by_one' ? STATUS_COLOR.watch : STATUS_COLOR.critical
                       const label = s.status === 'seen_by_both' ? 'both cameras' : s.status === 'seen_by_one' ? '1 camera' : 'blind spot'
                       return (
                         <div key={s.seat_id} className="rounded-xl p-3 text-center border" style={{ borderColor: `${color}35`, background: `${color}0a` }}>

@@ -1,16 +1,17 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
-import { ArrowLeft, Eye, LayoutGrid, Unplug, Plug, CameraOff, Film } from 'lucide-react'
+import { ArrowLeft, Eye, LayoutGrid, Unplug, Plug, CameraOff, Film, Radar } from 'lucide-react'
 import { useLive } from '../state/LiveContext'
 import { useHallScope } from '../state/useHallScope'
 import { RiskTrendChart } from '../components/RiskTrendChart'
 import { AlertFeed } from '../components/AlertFeed'
 import { EvidenceModal } from '../components/EvidenceModal'
 import { EmptyState } from '../components/EmptyState'
+import { ClassroomDigitalTwin } from '../components/ClassroomDigitalTwin'
 import { severityForCamera } from '../lib/cameraSeverity'
 import { STATUS_COLOR } from '../lib/colors'
 
-type ViewMode = 'analytics' | 'watch'
+type ViewMode = 'analytics' | 'watch' | 'twin'
 
 interface EventRow {
   id: number
@@ -131,6 +132,12 @@ export function CameraDetailPage() {
             >
               <Eye size={12} /> manual watch
             </button>
+            <button
+              onClick={() => setMode('twin')}
+              className={`flex items-center gap-1.5 text-[11px] mono px-3 py-2 border-l border-white/12 ${mode === 'twin' ? 'bg-white/12 text-white' : 'text-white/50 hover:text-white/80'}`}
+            >
+              <Radar size={12} /> digital twin
+            </button>
           </div>
           <button
             onClick={toggleConnection}
@@ -156,6 +163,8 @@ export function CameraDetailPage() {
             <p className="text-sm text-white/30">waiting for frames…</p>
           )}
         </div>
+      ) : mode === 'twin' ? (
+        <ClassroomDigitalTwin cameraId={cam.camera_id} />
       ) : (
         <div className="grid grid-cols-1 lg:grid-cols-5 gap-5 mb-6">
           <div className="lg:col-span-3 rounded-2xl overflow-hidden border border-white/8 bg-black flex items-center justify-center relative" style={{ aspectRatio: '16/10' }}>

@@ -333,6 +333,35 @@ async def run_blind_spot_analysis(body: dict | None = None, user: dict = Depends
     return tracker.result(deployment.expected_seats, camera_ids)
 
 
+@app.get("/api/setup/cameras/{camera_id}/layout")
+async def get_camera_layout(camera_id: str, user: dict = Depends(get_current_user)) -> dict:
+    """Classroom Digital Twin (2026-08-22): the same real calibration-
+    derived seat geometry the room-scan animation uses (SeatCalibration.
+    project_inverse — a seat's real plane position, projected back to
+    where it actually sits in this camera's pixel frame), but returned
+    instantly with no live detection window. The scan endpoint answers "is
+    this seat actually visible right now"; this one answers "where does
+    this seat's box belong on screen," which a persistent live twin needs
+    continuously and can't wait 2-20s for on every load."""
+    w = _worker_for_camera(camera_id)
+    if w is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"'{camera_id}' has no independent pipeline worker (fusion-only secondary cameras have no calibration of their own)",
+        )
+    boxes: dict[str, list[float]] = {}
+    for seat_id, plane_point in w.seat_cal.seats.items():
+        cx, cy = w.seat_cal.project_inverse(plane_point)
+        half = 45.0  # same placeholder box size as the room-scan endpoint
+        boxes[seat_id] = [cx - half, cy - half, cx + half, cy + half]
+    return {
+        "camera_id": camera_id,
+        "image_width": w.image_width,
+        "image_height": w.image_height,
+        "seat_boxes": boxes,
+    }
+
+
 @app.post("/api/setup/cameras/{camera_id}/scan")
 async def run_room_scan(camera_id: str, body: dict | None = None, user: dict = Depends(get_current_user)) -> dict:
     """Lab Setup room-scan (2026-08-22): the real data behind the

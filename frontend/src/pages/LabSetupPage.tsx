@@ -3,6 +3,7 @@ import { Plus, Trash2, Save, CheckCircle2, Loader2, UploadCloud, Radar, ShieldCh
 import { CoveragePanel } from '../components/CoveragePanel'
 import { ExamTypeSelector } from '../components/ExamTypeSelector'
 import { RoomScanOverlay } from '../components/RoomScanOverlay'
+import { ClassroomDigitalTwin } from '../components/ClassroomDigitalTwin'
 import { useHallScope } from '../state/useHallScope'
 
 interface SeatEntry {
@@ -89,6 +90,7 @@ export function LabSetupPage() {
   const [blindSpotRunning, setBlindSpotRunning] = useState(false)
   const [blindSpotError, setBlindSpotError] = useState<string | null>(null)
   const [scanningCameraId, setScanningCameraId] = useState<string | null>(null)
+  const [twinCameraId, setTwinCameraId] = useState<string | null>(null)
   const [loadedHall, setLoadedHall] = useState<string | null>(null)
 
   // Bug fix (2026-08-22): this form used to always start from a single
@@ -442,6 +444,35 @@ export function LabSetupPage() {
                 </button>
               ))}
           </div>
+        </div>
+      )}
+
+      {deployedCameras.filter((cam) => cam.has_own_worker).length > 0 && (
+        <div className="rounded-2xl border border-white/8 p-5 mb-6" style={{ background: 'linear-gradient(180deg, #ffffff06, #ffffff01)' }}>
+          <div className="flex items-center gap-2 mb-1">
+            <Radar size={14} className="text-white/50" />
+            <h2 className="text-sm font-bold uppercase tracking-wide">Classroom digital twin</h2>
+          </div>
+          <p className="text-[11px] mono text-white/40 mb-3">
+            a persistent, live-sensing view of this room — real calibrated seat geometry, colored and labeled by the
+            same live risk state as Live Monitor, updating continuously as part of setting the room up
+          </p>
+          <div className="flex flex-wrap gap-2 mb-3">
+            {deployedCameras
+              .filter((cam) => cam.has_own_worker)
+              .map((cam) => (
+                <button
+                  key={cam.camera_id}
+                  onClick={() => setTwinCameraId(twinCameraId === cam.camera_id ? null : cam.camera_id)}
+                  className={`flex items-center gap-1.5 text-[11px] mono px-3 py-2 rounded-lg border transition-colors ${
+                    twinCameraId === cam.camera_id ? 'border-white/40 bg-white/10 text-white' : 'border-white/15 text-white/70 hover:border-white/30'
+                  }`}
+                >
+                  <Radar size={12} /> {twinCameraId === cam.camera_id ? 'hide' : 'sense'} {cam.camera_id}
+                </button>
+              ))}
+          </div>
+          {twinCameraId && <ClassroomDigitalTwin cameraId={twinCameraId} />}
         </div>
       )}
 

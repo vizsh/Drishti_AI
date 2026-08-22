@@ -24,3 +24,18 @@ def explain_event(
         f"for {event.duration:.1f}s (baseline {baseline_mean:+.2f}±{baseline_std:.2f}). "
         f"{object_clause.capitalize()}."
     )
+
+
+def explain_object_only(seat_id: str, object_label: str, object_confidence: float, duration: float) -> str:
+    """Accuracy audit (2026-08-22): a confirmed contraband object is
+    direct evidence on its own — it does not need a coincidental torso/
+    motion deviation to matter, and requiring one meant a calm student
+    quietly using a phone could never be flagged (confirmed against real
+    ground-truth footage, data/test_videos/01, where exactly this
+    happened). This template covers that case: no baseline deviation is
+    cited because none was involved in the decision."""
+    return (
+        f"{object_label.capitalize()} detected at {seat_id}'s desk, confirmed by repeated detection "
+        f"over {duration:.1f}s (peak confidence {object_confidence:.2f}). No sustained posture or "
+        f"motion deviation was required for this alert — the object itself is the evidence."
+    )

@@ -6,6 +6,7 @@ import { AppLayout } from './layouts/AppLayout'
 import { LoginPage } from './pages/LoginPage'
 import { OverviewPage } from './pages/OverviewPage'
 import { CommandCenterPage } from './pages/CommandCenterPage'
+import { DashboardPage } from './pages/DashboardPage'
 import { SeatDetailPage } from './pages/SeatDetailPage'
 import { DigitalTwinPage } from './pages/DigitalTwinPage'
 import { AlertsPage } from './pages/AlertsPage'
@@ -45,6 +46,7 @@ export default function App() {
             >
               <Route index element={<Navigate to="/command-center" replace />} />
               <Route path="/command-center" element={<CommandCenterPage />} />
+              <Route path="/dashboard" element={<DashboardPage />} />
               <Route path="/live" element={<Navigate to="/command-center" replace />} />
               <Route path="/overview" element={<OverviewPage />} />
               <Route path="/seat/:seatId" element={<SeatDetailPage />} />

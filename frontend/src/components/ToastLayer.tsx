@@ -38,9 +38,18 @@ export function ToastLayer() {
       seenIds.current = new Set(alerts.map((a) => a.id))
       return
     }
-    const fresh = alerts.filter((a) => !seenIds.current!.has(a.id) && isSeatInScope(a.seatId))
+    const allFresh = alerts.filter((a) => !seenIds.current!.has(a.id) && isSeatInScope(a.seatId))
+    if (allFresh.length === 0) return
+    allFresh.forEach((a) => seenIds.current!.add(a.id))
+    // Accuracy audit (2026-08-22): backend/pipeline_worker.py now tags a
+    // recurring alert for the same seat within its notify-cooldown window
+    // as notify:false (still real, still logged, just not a fresh
+    // interrupt) -- so a seat genuinely repeating the same incident every
+    // 15-20s for a whole session doesn't produce a toast/sound every time.
+    // "gesture"/"calibration_warning" kinds don't set notify (backend
+    // doesn't gate them this way) so they toast as before.
+    const fresh = allFresh.filter((a) => a.notify !== false)
     if (fresh.length === 0) return
-    fresh.forEach((a) => seenIds.current!.add(a.id))
     setToasts((prev) => [...fresh, ...prev].slice(0, MAX_VISIBLE))
     fresh.forEach((a) => {
       setTimeout(() => setToasts((prev) => prev.filter((t) => t.id !== a.id)), AUTO_DISMISS_MS)
@@ -83,6 +92,9 @@ export function ToastLayer() {
                   <div className="flex items-center gap-2 mb-0.5">
                     <span className="text-xs font-bold">{t.seatId.toUpperCase()}</span>
                     <Badge tone={t.kind === 'alert' ? 'critical' : t.kind === 'calibration_warning' ? 'watch' : 'neutral'}>{style.label}</Badge>
+                    {t.occurrence != null && t.occurrence > 1 && (
+                      <span className="text-[10px] mono text-white/40">#{t.occurrence} this session</span>
+                    )}
                   </div>
                   <p className="text-[11px] text-white/70 leading-snug line-clamp-2">{shortAlertSummary(t.explanation)}</p>
                 </div>

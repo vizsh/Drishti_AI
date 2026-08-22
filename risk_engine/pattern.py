@@ -32,6 +32,14 @@ class EventPatternTracker:
         cutoff = now - self.window_seconds
         return sum(1 for e in seat_events if e.end_time >= cutoff)
 
+    def independently_corroborated_count(self, seat_id: str, now: float) -> int:
+        """Part 2b: of the events counted above, how many individually had
+        their OWN independent evidence (not just repetition of each
+        other) — see DeviationEvent.independently_corroborated."""
+        seat_events = self._events.get(seat_id, deque())
+        cutoff = now - self.window_seconds
+        return sum(1 for e in seat_events if e.end_time >= cutoff and e.independently_corroborated)
+
     def pattern_score(self, seat_id: str, now: float) -> float:
         """Roughly saturating: 1 event is low, 3+ events in the window is
         high. sqrt dampens growth so it doesn't scale unbounded/linearly."""

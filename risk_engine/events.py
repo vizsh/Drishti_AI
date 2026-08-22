@@ -21,6 +21,16 @@ class DeviationEvent:
     end_time: float
     peak_zscore: float
     signal: str  # "torso_yaw" or "motion"
+    # Part 2b (2026-08-21): set by RiskEngine.observe() right after this
+    # event is scored, based on whether IT had independent evidence
+    # (sustained torso_yaw duration, object, or gesture) — not from being
+    # counted alongside other events. Mutated in place on the same object
+    # EventPatternTracker already holds, so a later event's pattern-
+    # corroboration check can tell "repeated + independently corroborated
+    # at least once" apart from "repeated, but only ever corroborating
+    # itself" (the reproduced small-motion-alert gap, see
+    # risk_engine/adjudication.py).
+    independently_corroborated: bool = False
 
     @property
     def duration(self) -> float:

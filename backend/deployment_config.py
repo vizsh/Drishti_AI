@@ -29,6 +29,27 @@ class CameraConfig:
     calibration: SeatCalibration
     is_simulated: bool = False
     hall: str = "Hall A"
+    # Accuracy audit (2026-08-22): a single video file used to loop forever
+    # (PipelineWorker._run_once() re-opens the same video_path every time
+    # it ends), which is exactly why the same handful of behaviours kept
+    # re-triggering alerts session after session in testing — it was
+    # replaying the identical footage, not simulating a longer exam. When
+    # set, video_paths lets one camera cycle through multiple files in
+    # sequence (one full pass through the list, then repeats from the
+    # start) instead of looping a single clip — see
+    # backend/pipeline_worker.py's playlist handling. Empty means "use
+    # video_path alone," so existing single-file configs need no changes.
+    video_paths: list[str] = field(default_factory=list)
+    # Accuracy audit (2026-08-22): lets a camera be taken out of the live
+    # deployment without editing/removing its config entry — worker_groups()
+    # below filters these out entirely, so a disconnected camera runs no
+    # pipeline, streams no frames, and produces no seats/alerts until
+    # reconnected. See POST /api/setup/cameras/{id}/disconnect|reconnect.
+    disconnected: bool = False
+
+    @property
+    def playlist(self) -> list[str]:
+        return self.video_paths if self.video_paths else [self.video_path]
 
 
 @dataclass
@@ -62,7 +83,10 @@ class DeploymentConfig:
         starting a new group otherwise.
         """
         groups: list[tuple[CameraConfig, list[CameraConfig]]] = []
-        remaining = list(self.cameras)
+        # Accuracy audit (2026-08-22): a disconnected camera gets no
+        # worker at all — not started, not scored, not streamed — until
+        # reconnected. See CameraConfig.disconnected's docstring.
+        remaining = [cam for cam in self.cameras if not cam.disconnected]
         while remaining:
             primary = remaining.pop(0)
             primary_seats = set(primary.calibration.seats.keys())
@@ -111,6 +135,24 @@ def save_hall_cameras(hall: str, cameras: list[dict], path: Path = DEFAULT_CONFI
     path.write_text(json.dumps(data, indent=2))
 
 
+def set_camera_disconnected(camera_id: str, disconnected: bool, path: Path = DEFAULT_CONFIG_PATH) -> bool:
+    """Accuracy audit (2026-08-22): flips one camera's disconnected flag in
+    config/deployment.json in place, leaving everything else untouched.
+    Returns False if camera_id isn't in the config (caller should 404),
+    True on success. Pairs with worker_groups() filtering disconnected
+    cameras out entirely on the next _start_workers() call."""
+    data = json.loads(path.read_text())
+    found = False
+    for cam in data["cameras"]:
+        if cam["camera_id"] == camera_id:
+            cam["disconnected"] = disconnected
+            found = True
+            break
+    if found:
+        path.write_text(json.dumps(data, indent=2))
+    return found
+
+
 def load_deployment_config(path: Path = DEFAULT_CONFIG_PATH) -> DeploymentConfig:
     data = json.loads(path.read_text())
     halls = data.get("halls", {})
@@ -123,6 +165,8 @@ def load_deployment_config(path: Path = DEFAULT_CONFIG_PATH) -> DeploymentConfig
             calibration=_build_calibration(cam),
             is_simulated=cam.get("is_simulated", False),
             hall=halls.get(cam["camera_id"], "Hall A"),
+            video_paths=cam.get("video_paths", []),
+            disconnected=cam.get("disconnected", False),
         )
         for cam in data["cameras"]
     ]

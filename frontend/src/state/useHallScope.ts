@@ -8,6 +8,10 @@ export interface CameraInfo {
   is_primary: boolean
   seats: string[]
   streams_live_feed: boolean
+  disconnected?: boolean
+  video_paths?: string[]
+  stream_mode?: 'off' | 'background' | 'focused'
+  has_own_worker?: boolean
 }
 
 /**
@@ -21,10 +25,14 @@ export function useHallScope() {
   const { user } = useAuth()
   const [cameras, setCameras] = useState<CameraInfo[]>([])
 
-  useEffect(() => {
-    fetch('/api/cameras')
+  function refreshCameras() {
+    return fetch('/api/cameras')
       .then((r) => r.json())
       .then((d) => setCameras(d.cameras ?? []))
+  }
+
+  useEffect(() => {
+    refreshCameras()
   }, [])
 
   const scopedCameras = user?.role === 'invigilator' ? cameras.filter((c) => c.hall === user.hall) : cameras
@@ -42,5 +50,5 @@ export function useHallScope() {
     return scopedSeatIds.has(seatId)
   }
 
-  return { cameras: scopedCameras, allCameras: cameras, seatToHall, scopedSeatIds, halls, isSeatInScope }
+  return { cameras: scopedCameras, allCameras: cameras, seatToHall, scopedSeatIds, halls, isSeatInScope, refreshCameras }
 }

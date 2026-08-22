@@ -11,7 +11,12 @@ export function useLiveSocket() {
   const [cameraOnline, setCameraOnline] = useState(false)
   const [detectorFinetuned, setDetectorFinetuned] = useState(false)
   const [lightingEnhanced, setLightingEnhanced] = useState(false)
-  const [feedImage, setFeedImage] = useState<string | null>(null)
+  // Dashboard grid (2026-08-22): keyed by camera_id now that more than one
+  // camera can stream at once — a single global feedImage silently meant
+  // "whichever camera's frame arrived most recently overwrites every
+  // tile," which only ever looked correct because only one camera was
+  // ever actually streaming before this.
+  const [feedImages, setFeedImages] = useState<Record<string, string>>({})
   const [feedback, setFeedback] = useState<string[]>([])
   const wsRef = useRef<WebSocket | null>(null)
   const lastHeartbeatRef = useRef(0)
@@ -104,6 +109,11 @@ export function useLiveSocket() {
               explanation: ev.explanation ?? '',
               objectLabel: ev.object_label,
               evidenceUrl: ev.evidence_url,
+              prosecution: ev.prosecution,
+              defense: ev.defense,
+              notify: ev.notify,
+              occurrence: ev.occurrence,
+              needsVerification: ev.needs_verification,
             },
             ...prev,
           ].slice(0, 60))
@@ -143,7 +153,10 @@ export function useLiveSocket() {
           setFeedback((prev) => [ev.message ?? '', ...prev].slice(0, 10))
           break
         case 'frame':
-          if (ev.image) setFeedImage(`data:image/jpeg;base64,${ev.image}`)
+          if (ev.image && ev.camera_id) {
+            const cameraId = ev.camera_id
+            setFeedImages((prev) => ({ ...prev, [cameraId]: `data:image/jpeg;base64,${ev.image}` }))
+          }
           break
         case 'heartbeat':
           lastHeartbeatRef.current = Date.now()
@@ -191,6 +204,23 @@ export function useLiveSocket() {
     })
   }, [])
 
+  // Dashboard grid (2026-08-22): turns a camera's frame stream on/off/up —
+  // see POST /api/cameras/{id}/stream. Silently no-ops on a 404 (a true
+  // fusion-only secondary with no worker of its own to stream from) since
+  // callers iterate every camera in scope and shouldn't need to know which
+  // ones structurally can't stream.
+  const setStreamMode = useCallback(async (cameraId: string, mode: 'off' | 'background' | 'focused') => {
+    try {
+      await fetch(`/api/cameras/${cameraId}/stream`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ mode }),
+      })
+    } catch {
+      /* best-effort */
+    }
+  }, [])
+
   return {
     seats,
     riskHistory,
@@ -199,10 +229,11 @@ export function useLiveSocket() {
     cameraOnline,
     detectorFinetuned,
     lightingEnhanced,
-    feedImage,
+    feedImages,
     feedback,
     dismissAlert,
     dispatchInvigilator,
     acknowledgeAlert,
+    setStreamMode,
   }
 }

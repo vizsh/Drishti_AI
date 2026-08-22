@@ -8,18 +8,33 @@ from __future__ import annotations
 
 import asyncio
 import queue
+import time
 from pathlib import Path
 from typing import Annotated, Optional
 
-from fastapi import FastAPI, Request, Response, WebSocket, WebSocketDisconnect, Cookie, Depends, HTTPException, status
+from fastapi import (
+    Cookie,
+    Depends,
+    FastAPI,
+    File,
+    HTTPException,
+    Request,
+    Response,
+    UploadFile,
+    WebSocket,
+    WebSocketDisconnect,
+    status,
+)
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from backend import db
-from backend.deployment_config import DeploymentConfig, load_deployment_config, save_hall_cameras
+from backend import db, video_stream_manager
+from backend.deployment_config import DeploymentConfig, load_deployment_config, save_hall_cameras, set_camera_disconnected
 from backend.pipeline_worker import PipelineWorker
 from backend.report import generate_session_report_pdf
+from calibration.blind_spot_tracker import LiveBlindSpotTracker
 from calibration.coverage import CameraCoverageInput, validate_coverage
+from calibration.room_scan import RoomScanSession
 
 app = FastAPI(title="KINESIS AI")
 
@@ -75,6 +90,10 @@ async def api_logout(response: Response) -> dict:
 event_queue: "queue.Queue" = queue.Queue()
 workers: list[PipelineWorker] = []
 seat_to_worker: dict[str, PipelineWorker] = {}
+# Dashboard grid (2026-08-22): a worker's OWN camera_id -> worker mapping,
+# distinct from seat_to_worker, so /api/cameras/{id}/stream can find the
+# right worker even before that camera has resolved any seats yet.
+camera_to_worker: dict[str, PipelineWorker] = {}
 connections: list[WebSocket] = []
 session_id: int | None = None
 deployment: DeploymentConfig | None = None
@@ -85,9 +104,39 @@ _workers_lock = asyncio.Lock()
 # mid-session camera reconfiguration doesn't silently reset it to "mixed".
 current_exam_type: str = "mixed"
 
+# Part 1a (2026-08-21): the currently-active live blind-spot-analysis
+# window, if any. Set by /api/setup/blind-spot-analysis while it runs, None
+# otherwise — record_seat_observation() below is wired into every worker at
+# construction time (not re-wired per-request) so it's always safe to call,
+# it just no-ops when no analysis window is open.
+_blind_spot_tracker: LiveBlindSpotTracker | None = None
+
+# Lab Setup room-scan (2026-08-22): the currently-active per-camera scan
+# window, if any. Distinct from _blind_spot_tracker above -- this answers
+# "what does THIS one camera see, and where, right now" with real
+# bounding boxes, for the setup-flow sensing animation, not a cross-
+# camera coverage question.
+_room_scan: RoomScanSession | None = None
+
 
 def _worker_for_seat(seat_id: str) -> PipelineWorker | None:
     return seat_to_worker.get(seat_id)
+
+
+def _worker_for_camera(camera_id: str) -> PipelineWorker | None:
+    return camera_to_worker.get(camera_id)
+
+
+def record_seat_observation(camera_id: str, seat_id: str) -> None:
+    tracker = _blind_spot_tracker
+    if tracker is not None:
+        tracker.record(camera_id, seat_id)
+
+
+def record_seat_detection(camera_id: str, seat_id: str, bbox: tuple, confidence: float, timestamp: float) -> None:
+    scan = _room_scan
+    if scan is not None:
+        scan.record(camera_id, seat_id, bbox, confidence, timestamp)
 
 
 def _start_workers() -> None:
@@ -104,10 +153,11 @@ def _start_workers() -> None:
     Factored out of startup() (Part F, 2026-08-21) so the lab-setup flow
     can call this again after writing a new camera config, without
     restarting the whole app — same logic either way, not a second path."""
-    global workers, seat_to_worker
+    global workers, seat_to_worker, camera_to_worker
     assert deployment is not None
     workers = []
     seat_to_worker = {}
+    camera_to_worker = {}
     groups = deployment.worker_groups()
     for i, (primary, secondaries) in enumerate(groups):
         w = PipelineWorker(
@@ -118,9 +168,12 @@ def _start_workers() -> None:
             object_detect_confidence=deployment.object_detect_confidence,
             device="cuda",
             stream_frames=(i == 0),
+            on_seat_observed=record_seat_observation,
+            on_seat_detection=record_seat_detection,
         )
         w.risk_engine.apply_profile(current_exam_type)
         workers.append(w)
+        camera_to_worker[w.camera_id] = w
         for seat_id in w.seat_cal.seats:
             seat_to_worker[seat_id] = w
         w.start()
@@ -169,6 +222,33 @@ async def setup_hall_cameras(body: dict, user: dict = Depends(get_current_user))
     return {"status": "ok", "hall": hall, "camera_count": len(cameras)}
 
 
+async def _set_camera_connection(camera_id: str, disconnected: bool) -> dict:
+    global deployment
+    async with _workers_lock:
+        found = await asyncio.to_thread(set_camera_disconnected, camera_id, disconnected)
+        if not found:
+            raise HTTPException(status_code=404, detail=f"No camera '{camera_id}' in config/deployment.json")
+        _stop_workers()
+        deployment = load_deployment_config()
+        _start_workers()
+    return {"status": "ok", "camera_id": camera_id, "disconnected": disconnected}
+
+
+@app.post("/api/setup/cameras/{camera_id}/disconnect")
+async def disconnect_camera(camera_id: str, user: dict = Depends(get_current_user)) -> dict:
+    """Accuracy audit (2026-08-22): takes one camera out of the live
+    deployment without touching its saved calibration/seat config — its
+    worker group stops, it stops streaming/scoring, and (per
+    DeploymentConfig.worker_groups()) any seat ONLY it covered goes dark
+    rather than silently keeping stale state. Reversible via .../reconnect."""
+    return await _set_camera_connection(camera_id, True)
+
+
+@app.post("/api/setup/cameras/{camera_id}/reconnect")
+async def reconnect_camera(camera_id: str, user: dict = Depends(get_current_user)) -> dict:
+    return await _set_camera_connection(camera_id, False)
+
+
 @app.get("/api/setup/config")
 async def get_setup_config(user: dict = Depends(get_current_user)) -> dict:
     """Part F: current raw deployment.json content, for the setup UI to
@@ -179,6 +259,97 @@ async def get_setup_config(user: dict = Depends(get_current_user)) -> dict:
     from backend.deployment_config import DEFAULT_CONFIG_PATH
 
     return _json.loads(DEFAULT_CONFIG_PATH.read_text())
+
+
+@app.post("/api/setup/blind-spot-analysis")
+async def run_blind_spot_analysis(body: dict | None = None, user: dict = Depends(get_current_user)) -> dict:
+    """Part 1a: LIVE blind-spot analysis — distinct from the static
+    geometric /api/coverage check above. Opens a short window during which
+    every running worker's real nearest_seat() resolutions (wired via
+    on_seat_observed, see backend/pipeline_worker.py) get recorded against
+    the actual configured cameras, then reports per-seat whether real
+    detections landed from both cameras, exactly one, or neither — this is
+    what genuine occlusion (a monitor, another student, a doorframe) looks
+    like, which a purely geometric homography check cannot see. Requires
+    >=2 configured cameras and at least one running worker."""
+    global _blind_spot_tracker
+    if deployment is None or len(deployment.cameras) < 2:
+        raise HTTPException(
+            status_code=400,
+            detail="Live blind-spot analysis needs at least 2 configured cameras for this hall.",
+        )
+    if not workers:
+        raise HTTPException(status_code=400, detail="No pipeline workers running yet — save the camera setup first.")
+    duration = float((body or {}).get("duration_seconds", 8.0))
+    duration = max(3.0, min(duration, 60.0))
+    tracker = LiveBlindSpotTracker(duration_seconds=duration)
+    _blind_spot_tracker = tracker
+    try:
+        await asyncio.sleep(duration)
+    finally:
+        _blind_spot_tracker = None
+    camera_ids = [cam.camera_id for cam in deployment.cameras]
+    return tracker.result(deployment.expected_seats, camera_ids)
+
+
+@app.post("/api/setup/cameras/{camera_id}/scan")
+async def run_room_scan(camera_id: str, body: dict | None = None, user: dict = Depends(get_current_user)) -> dict:
+    """Lab Setup room-scan (2026-08-22): the real data behind the
+    "sensing" animation. Opens a short window during which THIS camera's
+    own worker records every real detection's bounding box + confidence
+    (wired via on_seat_detection, see backend/pipeline_worker.py), then
+    reports each of this camera's configured seats as visible/partial/
+    occluded with a real bbox to draw and a real confidence number — never
+    a fabricated one. A seat that gets zero real detections this window
+    still gets a bbox (via SeatCalibration.project_inverse(), the same
+    inverse-homography math /api/coverage already uses), so even "we
+    never saw this seat" has a real, calibration-derived place to draw at."""
+    global _room_scan
+    w = _worker_for_camera(camera_id)
+    if w is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"'{camera_id}' has no independent pipeline worker to scan (fusion-only secondary cameras have no frame loop of their own)",
+        )
+    duration = float((body or {}).get("duration_seconds", 5.0))
+    duration = max(2.0, min(duration, 20.0))
+
+    fallback_bboxes: dict[str, tuple] = {}
+    for seat_id, plane_point in w.seat_cal.seats.items():
+        cx, cy = w.seat_cal.project_inverse(plane_point)
+        half = 45.0  # a reasonable placeholder box size at typical CCTV distance
+        fallback_bboxes[seat_id] = (cx - half, cy - half, cx + half, cy + half)
+
+    scan = RoomScanSession(camera_id, duration_seconds=duration)
+    _room_scan = scan
+    try:
+        await asyncio.sleep(duration)
+    finally:
+        _room_scan = None
+    result = scan.result(fallback_bboxes)
+    result["image_width"] = w.image_width
+    result["image_height"] = w.image_height
+    return result
+
+
+@app.post("/api/setup/upload-video")
+async def upload_setup_video(file: UploadFile = File(...), user: dict = Depends(get_current_user)) -> dict:
+    """Part 1b: a user-uploaded video treated as a genuine LIVE feed, not a
+    batch replay. Saves the upload, then spins up a local simulated RTSP
+    stream (mediamtx + ffmpeg -re, see backend/video_stream_manager.py)
+    serving it back out with real-time pacing, looped. Returns the
+    resulting rtsp:// URL — the setup UI plugs THAT into the camera's
+    video_path field, so ingestion/video_source.py's is_live flag (True
+    for any rtsp:// URL) takes the exact same real-time-throttled code
+    path a genuine camera would, with no special-casing for uploads."""
+    suffix = Path(file.filename or "upload.mp4").suffix or ".mp4"
+    stream_name = f"upload_{int(time.time() * 1000)}"
+    dest = video_stream_manager.UPLOAD_DIR / f"{stream_name}{suffix}"
+    with dest.open("wb") as f:
+        while chunk := await file.read(1024 * 1024):
+            f.write(chunk)
+    rtsp_url = await asyncio.to_thread(video_stream_manager.start_live_stream, dest, stream_name)
+    return {"status": "ok", "stream_name": stream_name, "rtsp_url": rtsp_url, "filename": file.filename}
 
 
 @app.post("/api/session/exam-type")
@@ -263,20 +434,52 @@ async def get_cameras(user: dict = Depends(get_current_user)) -> dict:
     stream of their own — the frontend must not pretend otherwise."""
     if deployment is None:
         return {"cameras": []}
-    return {
-        "cameras": [
+    result = []
+    for cam in deployment.cameras:
+        w = camera_to_worker.get(cam.camera_id)
+        # Dashboard grid (2026-08-22): stream_mode now reflects the actual
+        # live, settable state of that camera's own worker — "off" for a
+        # true fusion-only secondary (e.g. cam_b_SIMULATED) that never gets
+        # its own PipelineWorker at all, not a static i==0 guess.
+        stream_mode = w.stream_mode if w is not None else "off"
+        result.append(
             {
                 "camera_id": cam.camera_id,
                 "hall": cam.hall,
                 "video_path": cam.video_path,
+                "video_paths": cam.playlist,
                 "is_simulated": cam.is_simulated,
-                "is_primary": i == 0,
+                "disconnected": cam.disconnected,
+                "is_primary": stream_mode == "focused",
                 "seats": sorted(cam.calibration.seats.keys()),
-                "streams_live_feed": i == 0,
+                "streams_live_feed": stream_mode != "off",
+                "stream_mode": stream_mode,
+                "has_own_worker": w is not None,
             }
-            for i, cam in enumerate(deployment.cameras)
-        ]
-    }
+        )
+    return {"cameras": result}
+
+
+@app.post("/api/cameras/{camera_id}/stream")
+async def set_camera_stream_mode(camera_id: str, body: dict, user: dict = Depends(get_current_user)) -> dict:
+    """Dashboard grid (2026-08-22): lets the frontend request "background"
+    (low-rate grid thumbnail) or "focused" (full-rate single view) for any
+    camera that has its own PipelineWorker — the fix for "only one camera
+    ever streams." Returns 404 for a camera with no worker of its own
+    (a true fusion-only secondary, e.g. cam_b_SIMULATED) since there is no
+    frame-decode loop to turn on for those, and that's a real fact about
+    the deployment, not a bug to silently swallow."""
+    mode = body.get("mode", "background")
+    if mode not in ("off", "background", "focused"):
+        raise HTTPException(status_code=400, detail=f"mode must be one of off/background/focused, got {mode!r}")
+    w = _worker_for_camera(camera_id)
+    if w is None:
+        raise HTTPException(
+            status_code=404,
+            detail=f"'{camera_id}' has no independent pipeline worker (fusion-only secondary cameras have no visual feed to stream)",
+        )
+    w.set_stream_mode(mode)
+    return {"status": "ok", "camera_id": camera_id, "stream_mode": mode}
 
 
 @app.post("/api/alerts/{seat_id}/dismiss")

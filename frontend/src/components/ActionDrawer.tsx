@@ -19,6 +19,9 @@ import {
   AlertTriangle,
   MinusCircle,
   Send,
+  Gavel,
+  ThumbsUp,
+  ThumbsDown,
 } from 'lucide-react'
 import type { AlertItem } from '../types'
 import { humanizeConfidence, formatAlertTime } from '../lib/humanize'
@@ -142,6 +145,45 @@ export function ActionDrawer({ alert, onClose, onDismiss, onDispatch, onAcknowle
                   <div className="mt-2 flex items-center gap-2 px-3 py-2 rounded-lg bg-watch/10 border border-watch/20">
                     <AlertTriangle size={13} className="text-watch shrink-0" />
                     <span className="text-xs text-watch">{alert.objectLabel} detected — unverified</span>
+                  </div>
+                )}
+                {((alert.prosecution?.length ?? 0) > 0 || (alert.defense?.length ?? 0) > 0) && (
+                  <div className="mt-3 pt-3 border-t border-white/8">
+                    <div className="flex items-center gap-1.5 mb-2 text-[10px] mono uppercase tracking-wide text-white/40">
+                      <Gavel size={11} /> Evidence checklist — both sides, before this alert fired
+                    </div>
+                    {alert.prosecution && alert.prosecution.length > 0 && (
+                      <div className="mb-2">
+                        <div className="text-[10px] mono text-calm/80 mb-1">Corroborating (for)</div>
+                        <div className="flex flex-col gap-1">
+                          {alert.prosecution.map((f, i) => (
+                            <div key={i} className="flex items-start gap-1.5 text-[11px] text-white/70">
+                              <ThumbsUp size={11} className="text-calm shrink-0 mt-0.5" />
+                              <div>
+                                <div>{f.label}</div>
+                                <div className="text-[10px] mono text-white/35">{f.detail}</div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                    {alert.defense && alert.defense.length > 0 && (
+                      <div>
+                        <div className="text-[10px] mono text-white/40 mb-1">Counter-evidence considered (not disqualifying here)</div>
+                        <div className="flex flex-col gap-1">
+                          {alert.defense.map((f, i) => (
+                            <div key={i} className="flex items-start gap-1.5 text-[11px] text-white/60">
+                              <ThumbsDown size={11} className="text-white/40 shrink-0 mt-0.5" />
+                              <div>
+                                <div>{f.label}</div>
+                                <div className="text-[10px] mono text-white/35">{f.detail}</div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 )}
                 <div className="flex gap-3 mt-3">

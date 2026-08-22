@@ -151,12 +151,20 @@ function AlertCard({
         ) : isGesture ? (
           <Badge tone="neutral">Gesture</Badge>
         ) : (
-          <span className="text-[10px] mono text-white/40">{item.timestamp.toFixed(1)}s</span>
+          <div className="flex items-center gap-1.5">
+            {item.occurrence != null && item.occurrence > 1 && (
+              <span className="text-[10px] mono text-white/40">#{item.occurrence} this session</span>
+            )}
+            <span className="text-[10px] mono text-white/40">{item.timestamp.toFixed(1)}s</span>
+          </div>
         )}
       </div>
       {item.objectLabel && (
-        <div className="mb-1">
+        <div className="mb-1 flex flex-wrap gap-1.5">
           <Badge tone="watch">{item.objectLabel} — unverified</Badge>
+          {item.needsVerification && (
+            <Badge tone="neutral">moderate confidence — please verify visually</Badge>
+          )}
         </div>
       )}
       <p className="text-xs text-white/75 leading-snug mb-1">{shortLine}</p>

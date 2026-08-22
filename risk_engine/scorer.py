@@ -15,8 +15,9 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
+from risk_engine.adjudication import Finding, adjudicate
 from risk_engine.events import DeviationEvent, SustainedDeviationDetector
-from risk_engine.explain import explain_event
+from risk_engine.explain import explain_event, explain_object_only
 from risk_engine.pattern import EventPatternTracker
 
 # Part G Tier 1 (2026-08-21): exam-type weight profiles. yaw/motion used to
@@ -55,6 +56,28 @@ class RiskAssessment:
     explanation: Optional[str]
     triggering_event: Optional[DeviationEvent]
     is_alert: bool = False  # Part B (2026-08-21): corroborated enough for a full alert, not just watch
+    # Part 2b: the deterministic prosecution/defense checklist behind
+    # is_alert above — empty on frames with no completed DeviationEvent.
+    prosecution: list[Finding] = None  # type: ignore[assignment]
+    defense: list[Finding] = None  # type: ignore[assignment]
+    # Accuracy audit (2026-08-22): True when this alert's ONLY corroboration
+    # is object detection with no motion/yaw/gesture co-signal at all, at a
+    # confidence below object_alert_high_confidence. The stock object
+    # detector genuinely confuses some real background objects for
+    # contraband at moderate confidence (confirmed against real footage,
+    # data/test_videos/04 -- a static water bottle read as "cell phone" at
+    # 0.15-0.31 for an entire 143s clip) in a band that overlaps real
+    # detections too closely to separate by confidence alone. Rather than
+    # silently trust or silently drop a borderline case, it's still logged
+    # and shown, but flagged for a human to look rather than pushed as a
+    # confident, auto-notify alert (see PipelineWorker's notify gating).
+    needs_verification: bool = False
+
+    def __post_init__(self) -> None:
+        if self.prosecution is None:
+            self.prosecution = []
+        if self.defense is None:
+            self.defense = []
 
 
 class RiskEngine:
@@ -71,10 +94,37 @@ class RiskEngine:
         alert_min_duration: float = 8.0,
         alert_min_repeat_count: int = 2,
         alert_cap_when_uncorroborated: float = 0.45,
+        object_alert_min_duration: float = 2.0,
+        object_alert_high_confidence: float = 0.5,
         exam_type: str = "mixed",
     ):
         self.detector = SustainedDeviationDetector(zscore_threshold, min_event_duration)
         self.pattern_tracker = EventPatternTracker(pattern_window_seconds)
+        # Accuracy audit (2026-08-22): a confirmed contraband object used to
+        # only ever matter as a corroborator of a torso/motion deviation
+        # event -- if no such event happened to complete, object detection
+        # (however clearly confirmed) was silently discarded. Ground-truth
+        # audit (data/test_videos/01) found exactly this: a real phone,
+        # confirmed present for 15+ continuous seconds, produced zero
+        # alerts, because the student wasn't also moving enough to trip a
+        # z-score event at the same time. This constant gates a SEPARATE
+        # trigger path (see observe() below) that lets a confirmed object
+        # alert on its own once it's been persistently detected for this
+        # long -- 2.0s, matched to ObjectPersistenceTracker's own 2-hit
+        # requirement, so this duration is never shorter than what
+        # "confirmed" already means.
+        self.object_alert_min_duration = object_alert_min_duration
+        # Accuracy audit (2026-08-22): below this confidence, an object-
+        # only alert (no motion/yaw/gesture at all) is still raised and
+        # logged but flagged needs_verification=True instead of pushed as
+        # a confident notification -- see RiskAssessment.needs_verification.
+        self.object_alert_high_confidence = object_alert_high_confidence
+        # Per-seat: has the CURRENT confirmed-object streak already been
+        # evaluated for an alert? Reset the moment the object stops being
+        # confirmed, so a new appearance gets its own fresh evaluation
+        # instead of firing a new alert every single frame the object stays
+        # in view (the exact flooding this whole audit exists to stop).
+        self._object_streak_evaluated: dict[str, bool] = {}
         self.weight_yaw = weight_yaw
         self.weight_motion = weight_motion
         self.weight_pattern = weight_pattern
@@ -118,7 +168,13 @@ class RiskEngine:
         baseline_yaw_std: float = 0.0,
         object_label: Optional[str] = None,
         object_confidence: float = 0.0,
+        object_duration: float = 0.0,
         gesture_active: bool = False,
+        object_class_verified: bool = True,
+        fused_confidence: float = 1.0,
+        camera_needs_attention: bool = False,
+        recent_false_alarm_count: int = 0,
+        recent_calibration_warning: bool = False,
     ) -> RiskAssessment:
         """gesture_active: a behaviour/gestures.py GestureDetector event
         (e.g. hand_reach_across) completed for this seat on this frame —
@@ -170,38 +226,106 @@ class RiskEngine:
             + self.weight_gesture * gesture_component
         )
 
-        # Part B (2026-08-21 pre-demo hardening): a completed DeviationEvent
-        # only qualifies as a genuine "alert" — not just "watch" — when
-        # corroborated. "torso_yaw" (head/body rotation) maps to the PS's
-        # own named behaviours ("excessive head turning", "body rotation
-        # toward neighbouring students"), so sustained duration alone can
-        # still qualify it, provided that duration clears the stricter
-        # alert_min_duration bar (not just the 1.5s floor for "is this a
-        # real event at all"). "motion" (movement level) doesn't map to any
-        # specific named PS behaviour on its own — could be entirely
-        # innocuous (stretching, settling in) — so it NEVER qualifies by
-        # duration alone, only when corroborated by something else.
-        # Object detection, a concurrent gesture, or the pattern tracker
-        # confirming this isn't the first occurrence in the window all
-        # count as corroboration for either signal.
+        # Part B/2b (2026-08-21): a completed DeviationEvent only qualifies
+        # as a genuine "alert" — not just "watch" — when a deterministic
+        # prosecution/defense adjudication (risk_engine/adjudication.py)
+        # both (a) clears a real corroboration bar and (b) isn't vetoed by
+        # measured counter-evidence (low confidence, a camera needing
+        # attention, this seat's own false-positive history, an unverified
+        # detector as the sole corroboration, or a known calibration-issue
+        # signature). Every finding is surfaced to the invigilator UI
+        # alongside the plain-language explanation — never hidden reasoning.
         is_alert = False
-        if event is not None:
-            corroborated_by_object = object_label is not None
-            corroborated_by_gesture = gesture_active
-            corroborated_by_pattern = self.pattern_tracker.event_count(seat_id, timestamp) >= self.alert_min_repeat_count
-            corroborated_by_duration = event.signal == "torso_yaw" and event.duration >= self.alert_min_duration
-            is_alert = corroborated_by_duration or corroborated_by_object or corroborated_by_gesture or corroborated_by_pattern
-            if not is_alert:
-                # Uncorroborated single deviation: keep it visible as
-                # "watch" (below is capped just under the alert threshold),
-                # never escalate to "alert" - sensitivity isn't lost, only
-                # the standalone-alert claim is.
-                risk_score = min(risk_score, self.alert_cap_when_uncorroborated)
+        prosecution: list[Finding] = []
+        defense: list[Finding] = []
+        explanation: Optional[str] = None
+        triggering_event = event
+        needs_verification = False
 
-        explanation = None
+        # Reset the object-alert streak tracker the moment the object isn't
+        # confirmed anymore, so its next appearance is evaluated fresh.
+        if object_label is None:
+            self._object_streak_evaluated[seat_id] = False
+
         if event is not None:
+            self._object_streak_evaluated[seat_id] = True  # handled via the event path below, don't also fire object-only
+            event.independently_corroborated = (
+                (event.signal == "torso_yaw" and event.duration >= self.alert_min_duration)
+                or object_label is not None
+                or gesture_active
+            )
+            result = adjudicate(
+                event_signal=event.signal,
+                event_duration=event.duration,
+                alert_min_duration=self.alert_min_duration,
+                object_label=object_label,
+                object_confidence=object_confidence,
+                object_class_verified=object_class_verified,
+                gesture_active=gesture_active,
+                pattern_event_count=self.pattern_tracker.event_count(seat_id, timestamp),
+                pattern_independently_corroborated_count=self.pattern_tracker.independently_corroborated_count(seat_id, timestamp),
+                alert_min_repeat_count=self.alert_min_repeat_count,
+                fused_confidence=fused_confidence,
+                camera_needs_attention=camera_needs_attention,
+                recent_false_alarm_count=recent_false_alarm_count,
+                recent_calibration_warning=recent_calibration_warning,
+            )
+            is_alert = result.is_alert
+            prosecution = result.prosecution
+            defense = result.defense
             explanation = explain_event(event, baseline_yaw_mean, baseline_yaw_std, object_label)
+        elif object_label is not None and object_duration >= self.object_alert_min_duration:
+            # Object-only trigger path (accuracy audit, 2026-08-22): fires
+            # once per confirmed-object streak, independent of any z-score
+            # deviation -- see this module's __init__ docstring on
+            # object_alert_min_duration for why this path exists at all.
+            already_evaluated = self._object_streak_evaluated.get(seat_id, False)
+            self._object_streak_evaluated[seat_id] = True
+            if not already_evaluated:
+                synthetic_event = DeviationEvent(
+                    seat_id=seat_id,
+                    start_time=timestamp - object_duration,
+                    end_time=timestamp,
+                    peak_zscore=0.0,
+                    signal="object",
+                )
+                result = adjudicate(
+                    event_signal="object",
+                    event_duration=object_duration,
+                    alert_min_duration=self.alert_min_duration,
+                    object_label=object_label,
+                    object_confidence=object_confidence,
+                    object_class_verified=object_class_verified,
+                    gesture_active=gesture_active,
+                    pattern_event_count=self.pattern_tracker.event_count(seat_id, timestamp),
+                    pattern_independently_corroborated_count=self.pattern_tracker.independently_corroborated_count(seat_id, timestamp),
+                    alert_min_repeat_count=self.alert_min_repeat_count,
+                    fused_confidence=fused_confidence,
+                    camera_needs_attention=camera_needs_attention,
+                    recent_false_alarm_count=recent_false_alarm_count,
+                    recent_calibration_warning=recent_calibration_warning,
+                )
+                is_alert = result.is_alert
+                prosecution = result.prosecution
+                defense = result.defense
+                triggering_event = synthetic_event
+                explanation = explain_object_only(seat_id, object_label, object_confidence, object_duration)
+                needs_verification = is_alert and object_confidence < self.object_alert_high_confidence
+
+        if (event is not None or triggering_event is not None) and not is_alert:
+            # Uncorroborated/vetoed single deviation: keep it visible as
+            # "watch" (below is capped just under the alert threshold),
+            # never escalate to "alert" - sensitivity isn't lost, only
+            # the standalone-alert claim is.
+            risk_score = min(risk_score, self.alert_cap_when_uncorroborated)
 
         return RiskAssessment(
-            seat_id=seat_id, risk_score=risk_score, explanation=explanation, triggering_event=event, is_alert=is_alert
+            seat_id=seat_id,
+            risk_score=risk_score,
+            explanation=explanation,
+            triggering_event=triggering_event,
+            is_alert=is_alert,
+            prosecution=prosecution,
+            defense=defense,
+            needs_verification=needs_verification,
         )

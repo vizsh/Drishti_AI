@@ -16,11 +16,11 @@ import queue
 import threading
 import time
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 import cv2
 
-from behaviour.gestures import GestureDetector, explain_calibration_warning, explain_gesture
+from behaviour.gestures import GestureDetector, explain_gesture
 from calibration.baseline import BaselineCalibrator, TemporalSample, compute_motion_magnitude
 from calibration.multi_camera import SeatObservation, fuse_seat_observations
 from backend.deployment_config import CameraConfig
@@ -33,6 +33,7 @@ from perception.motion_heatmap import MotionHeatmapAccumulator
 from perception.object_detector import ObjectDetector
 from perception.roi_contraband import detect_in_roi, workspace_roi
 from perception.pose import LEFT_SHOULDER, RIGHT_SHOULDER, PoseEstimator
+from risk_engine.object_persistence import ObjectPersistenceTracker
 from risk_engine.scorer import RiskEngine
 
 SKELETON_EDGES = [
@@ -43,6 +44,19 @@ SKELETON_EDGES = [
 ]
 RISK_COLOR_BGR = {"calm": (129, 209, 52), "elevated": (36, 191, 251), "alert": (91, 91, 251)}
 FINE_TUNED_WEIGHTS = Path("data/weights/phone_detector_v1.pt")
+# Dashboard grid (2026-08-22): a "background" camera's frames are sampled
+# far more sparsely than a "focused" one — a grid tile only needs an
+# occasional thumbnail, not a smooth feed, and this is what keeps
+# multiple cameras streaming at once cheap.
+BACKGROUND_STREAM_EVERY_N_FRAMES = 20
+# Accuracy audit (2026-08-22): which detected LABELS are trustworthy enough
+# to stand as an alert's sole corroboration -- a per-class distinction, not
+# a per-model one (see risk_engine/adjudication.py's object_class_verified
+# docstring). "cell phone" is a mature, heavily-validated stock COCO class,
+# confirmed against real ground-truth footage this session. "book"
+# (perception/object_detector.py's own comment) is an explicitly
+# unvalidated placeholder proxy for paper/chit and stays untrusted alone.
+VERIFIED_OBJECT_LABELS = {"cell phone"}
 
 
 class SecondaryCameraFeed(threading.Thread):
@@ -57,14 +71,32 @@ class SecondaryCameraFeed(threading.Thread):
     path — real multi-camera deployment configures a genuine second
     camera's video_path here instead."""
 
-    def __init__(self, camera_config: CameraConfig, device: Optional[str], target_fps: float = 10.0):
+    def __init__(
+        self,
+        camera_config: CameraConfig,
+        device: Optional[str],
+        target_fps: float = 10.0,
+        on_seat_observed: Optional[Callable[[str, str], None]] = None,
+        on_seat_detection: Optional[Callable[[str, str, tuple, float, float], None]] = None,
+    ):
         super().__init__(daemon=True)
         self.seat_cal = camera_config.calibration
         self.pose_estimator = PoseEstimator(device=device)
-        self.video_path = camera_config.video_path
+        self._video_playlist = camera_config.playlist
+        self._playlist_index = 0
+        self.video_path = self._video_playlist[self._playlist_index]
         self.image_width = camera_config.image_width
         self.image_height = camera_config.image_height
         self.target_fps = target_fps
+        # Part 1a: fires on every real (non-None) nearest_seat() resolution
+        # so a live blind-spot analysis window can observe actual detection
+        # coverage, not just the static homography geometry check.
+        self.on_seat_observed = on_seat_observed
+        # Lab Setup room-scan (2026-08-22): same firing point as
+        # on_seat_observed above, but carries the actual bbox/confidence a
+        # RoomScanSession needs to draw a real wireframe box, not just
+        # "this seat was hit."
+        self.on_seat_detection = on_seat_detection
         self._stop_event = threading.Event()
         self._lock = threading.Lock()
         self._latest: dict[str, tuple[float, SeatObservation]] = {}
@@ -97,6 +129,10 @@ class SecondaryCameraFeed(threading.Thread):
                         seat_id, _ = self.seat_cal.nearest_seat(((x1 + x2) / 2.0, y2))
                         if seat_id is None:
                             continue
+                        if self.on_seat_observed is not None:
+                            self.on_seat_observed(self.seat_cal.camera_id, seat_id)
+                        if self.on_seat_detection is not None:
+                            self.on_seat_detection(self.seat_cal.camera_id, seat_id, p.xyxy, p.detection_confidence(), sim_time)
                         keypoints = p.smoothed_keypoints or p.keypoints
                         shoulder_width = abs(keypoints[RIGHT_SHOULDER][0] - keypoints[LEFT_SHOULDER][0]) or 1.0
                         motion = 0.0
@@ -115,6 +151,10 @@ class SecondaryCameraFeed(threading.Thread):
                             self._latest[seat_id] = (sim_time, obs)
             finally:
                 video.release()
+            # Accuracy audit (2026-08-22): same playlist-cycling as
+            # PipelineWorker.run() -- see CameraConfig.playlist.
+            self._playlist_index = (self._playlist_index + 1) % len(self._video_playlist)
+            self.video_path = self._video_playlist[self._playlist_index]
 
 
 class PipelineWorker(threading.Thread):
@@ -128,12 +168,31 @@ class PipelineWorker(threading.Thread):
         device: Optional[str] = None,
         target_fps: float = 10.0,
         stream_every_n_frames: int = 2,
-        object_detect_every_n_frames: int = 5,
+        # Accuracy audit (2026-08-22): raised from 1-in-5 to 1-in-2 sampled
+        # frames after finding a real contraband object visible only in
+        # brief, occlusion-interrupted windows (a candidate's own body
+        # blocking the camera's view of her hands most of the time) --
+        # checking every ~0.5s missed those windows outright; every ~0.2s
+        # catches enough of them to corroborate via ObjectPersistenceTracker.
+        object_detect_every_n_frames: int = 2,
         stream_frames: bool = True,
+        on_seat_observed: Optional[Callable[[str, str], None]] = None,
+        on_seat_detection: Optional[Callable[[str, str, tuple, float, float], None]] = None,
     ):
         super().__init__(daemon=True)
         self.camera_id = primary.camera_id
-        self.video_path = primary.video_path
+        # Part 1a: same live blind-spot-analysis hook as SecondaryCameraFeed,
+        # fired from this worker's own primary-camera seat resolutions below.
+        self.on_seat_observed = on_seat_observed
+        self.on_seat_detection = on_seat_detection
+        # Accuracy audit (2026-08-22): video_path stays the CURRENT file
+        # (used by every existing call site below unchanged); the
+        # playlist cycles it forward in run(), once per full pass through
+        # a file, instead of _run_once() reopening the same path forever.
+        # See CameraConfig.playlist's docstring for why this exists.
+        self._video_playlist = primary.playlist
+        self._playlist_index = 0
+        self.video_path = self._video_playlist[self._playlist_index]
         self.image_width = primary.image_width
         self.image_height = primary.image_height
         self.event_queue = event_queue
@@ -141,18 +200,31 @@ class PipelineWorker(threading.Thread):
         self.target_fps = target_fps
         self.stream_every_n_frames = stream_every_n_frames
         self.object_detect_every_n_frames = object_detect_every_n_frames
-        # Only one worker's frames are ever pushed over the WebSocket "frame"
-        # channel at a time (the currently-focused tile) — see
-        # backend/main.py's worker_groups() wiring and PS performance note:
-        # never decode+stream more than one live feed at once.
-        self.stream_frames = stream_frames
+        # Dashboard accuracy audit (2026-08-22): used to be a fixed
+        # constructor flag with only one worker ever set to stream_frames
+        # =True, permanently blanking every other camera tile. Replaced
+        # with a live-settable three-level mode so every camera can
+        # actually be viewed, not just the first one:
+        #   "off"       — no frame decode/emit at all (cheapest).
+        #   "background"— a low-rate thumbnail (every
+        #                  BACKGROUND_STREAM_EVERY_N_FRAMES-th qualifying
+        #                  frame) — enough for a grid tile, not a full feed.
+        #   "focused"   — full rate (stream_every_n_frames), for whichever
+        #                  single tile the user actually opened — the
+        #                  original "never decode more than one full feed
+        #                  at a time" performance rule still holds, it's
+        #                  just enforced by mode instead of by construction.
+        self.stream_mode = "focused" if stream_frames else "background"
 
         # Occlusion fusion (docs/architecture.md §8, PS risk "Occlusion") —
         # one SecondaryCameraFeed per camera that shares >=1 seat with this
         # group's primary (backend/deployment_config.py's worker_groups()).
         # See config/deployment.json's cam_b_SIMULATED comment for why the
         # demo config's second camera is simulated, not real hardware.
-        self.secondary_cameras = [SecondaryCameraFeed(cam, device, target_fps) for cam in secondaries]
+        self.secondary_cameras = [
+            SecondaryCameraFeed(cam, device, target_fps, on_seat_observed=on_seat_observed, on_seat_detection=on_seat_detection)
+            for cam in secondaries
+        ]
 
         self.seat_cal = primary.calibration
         self.calibrator = BaselineCalibrator(settling_window_seconds=settling_seconds)
@@ -160,19 +232,52 @@ class PipelineWorker(threading.Thread):
         self.gesture_detector = GestureDetector(self.seat_cal)
         self.anchor_quality = SeatAnchorQualityTracker(camera_id=self.camera_id)
         self.compute_budget = SeatComputeBudget(base_interval_frames=object_detect_every_n_frames)
+        # Accuracy audit (2026-08-22): a real phone in real footage
+        # (data/test_videos/01) was confirmed present by this ROI detector
+        # at confidence up to 0.36, but sat in a noisy 0.10-0.33 band most
+        # of the time -- below the old single-frame 0.30-0.35 bar, so the
+        # real signal was being thrown away. This requires the SAME label
+        # twice within a window instead of trusting one frame, so the
+        # confidence floor can come down without letting a one-off false
+        # positive through on its own. Window widened to 4.5s (not 3.0)
+        # because the object is only briefly visible between moments the
+        # candidate's own body occludes it from this camera's angle --
+        # confirmed by dumping the actual ROI crops used frame-by-frame
+        # around the real incident: most show her back, a minority show a
+        # hand/object at the desk. Two occluded-then-visible glimpses
+        # further apart still need to corroborate each other.
+        self.object_persistence = ObjectPersistenceTracker(window_seconds=4.5, min_hits=2)
         self.pose_estimator = PoseEstimator(device=device)
         self.frame_buffer = RollingFrameBuffer(max_seconds=35.0)
         self.heatmap: Optional[MotionHeatmapAccumulator] = None  # lazily sized on first frame
         self._last_raw_frame = None
 
-        # v1 fine-tune only, per docs/architecture.md §4 — known to overfit on
-        # background objects (found via Stage 4 validation), so its output is
-        # surfaced to the UI tagged "experimental", never fed silently as fact.
-        weights = str(FINE_TUNED_WEIGHTS) if FINE_TUNED_WEIGHTS.exists() else "yolo11n.pt"
+        # Accuracy audit (2026-08-22): this used to auto-switch to
+        # FINE_TUNED_WEIGHTS whenever the file existed on disk, with no
+        # check that its class taxonomy even matched what gets requested.
+        # It doesn't: data/weights/phone_detector_v1.pt is a single-class
+        # model (YOLO('...').names == {0: 'phone'}), but ObjectDetector's
+        # default `classes` filter asks for COCO indices 67 ("cell phone")
+        # and 73 ("book") -- indices that don't exist in this model's
+        # 1-class output space. Every request for class 67/73 against a
+        # model that only ever predicts class 0 returns nothing, silently,
+        # every single frame. Confirmed directly: running the real
+        # pipeline against ground-truth footage of a candidate actually
+        # using a phone (data/test_videos/01) produced zero object
+        # detections of any kind, for the entire video, every time --
+        # not a threshold problem, this model was never able to detect
+        # anything through this filter. Combined with docs/build_order.md's
+        # own finding that v1 additionally overfit and false-positived on a
+        # static chair (69 training images, since documented as too few),
+        # the fine-tuned checkpoint is not used until a validated,
+        # correctly-labeled v2 exists — stock COCO yolo11n.pt is used
+        # instead, which DOES genuinely detect a real phone in that same
+        # ground-truth footage (confirmed up to 0.36 confidence, directly
+        # against the real incident window).
         self.object_detector = ObjectDetector(
-            weights=weights, confidence_threshold=object_detect_confidence, device=device
+            weights="yolo11n.pt", confidence_threshold=object_detect_confidence, device=device
         )
-        self.object_detector_is_finetuned = FINE_TUNED_WEIGHTS.exists()
+        self.object_detector_is_finetuned = False
 
         self._prev_keypoints: dict[str, list[tuple[float, float]]] = {}
         self._stop_event = threading.Event()
@@ -181,10 +286,43 @@ class PipelineWorker(threading.Thread):
         self._frame_counter = 0
         self._last_frame_wall_time = 0.0
 
+        # Part 2b: defense-side counter-evidence state, per seat — a
+        # recent false-alarm dismissal or a recent calibration-issue
+        # signature both feed risk_engine.adjudicate() so an alert relying
+        # solely on a signal this seat is known to be unreliable about
+        # gets vetoed rather than dispatched.
+        self._false_alarm_counts: dict[str, int] = {}
+        self._last_calibration_warning: dict[str, float] = {}
+        self._calibration_warning_window_s = 120.0
+
+        # Accuracy audit (2026-08-22): a seat that's genuinely, repeatedly
+        # doing the same thing (checking a phone every 15-20s for the
+        # whole exam, confirmed against real ground-truth footage,
+        # data/test_videos/02) is real evidence every time -- but pushing
+        # 14 separate toast/audio notifications across one session for the
+        # same ongoing pattern is exactly the alert fatigue this whole
+        # audit exists to fix. Every alert still gets logged/persisted and
+        # shown in the Alerts list regardless; this only gates the
+        # interrupt-worthy "notify" flag the frontend uses for toast/audio,
+        # so a recurring pattern reads as "seat_X: Nth occurrence this
+        # session" instead of N separate pop-ups.
+        self._last_notify_time: dict[str, float] = {}
+        self._seat_alert_counts: dict[str, int] = {}
+        self._notify_cooldown_s = 60.0
+
     def stop(self) -> None:
         self._stop_event.set()
         for cam in self.secondary_cameras:
             cam.stop()
+
+    def set_stream_mode(self, mode: str) -> None:
+        """Dashboard grid (2026-08-22): live-settable, not fixed at
+        construction — lets the frontend put a camera into "background"
+        (grid thumbnail) or "focused" (full-rate single view) mode on
+        demand, and drop it back to "off" when nobody's looking at it."""
+        if mode not in ("off", "background", "focused"):
+            raise ValueError(f"invalid stream mode: {mode!r}")
+        self.stream_mode = mode
 
     def dismiss_alert(self, seat_id: str) -> None:
         """docs/architecture.md §10 feedback loop, wired to a real endpoint.
@@ -203,6 +341,7 @@ class PipelineWorker(threading.Thread):
         event) without touching calibration, since the alert was correct."""
         if resolution == "false_alarm":
             self.calibrator.widen_threshold(seat_id)
+            self._false_alarm_counts[seat_id] = self._false_alarm_counts.get(seat_id, 0) + 1
             message = f"{seat_id} baseline widened (false positive dismissed)"
         elif resolution == "confirmed":
             message = f"{seat_id} alert confirmed by invigilator"
@@ -296,8 +435,16 @@ class PipelineWorker(threading.Thread):
             cam.start()
         while not self._stop_event.is_set():
             self._loop_count += 1
-            self.event_queue.put({"type": "loop_start", "loop": self._loop_count})
+            self.event_queue.put({"type": "loop_start", "loop": self._loop_count, "video_path": self.video_path})
             self._run_once()
+            # Accuracy audit (2026-08-22): advance to the NEXT file in the
+            # playlist once this one ends, wrapping back to the start only
+            # after a full pass -- a single file no longer just loops
+            # itself forever (see CameraConfig.playlist). A live (RTSP)
+            # source's frames() never returns except via stop_event, so
+            # this line is unreachable for that case, same as before.
+            self._playlist_index = (self._playlist_index + 1) % len(self._video_playlist)
+            self.video_path = self._video_playlist[self._playlist_index]
 
     def _run_once(self) -> None:
         video = VideoSource(self.video_path, target_fps=self.target_fps)
@@ -384,9 +531,15 @@ class PipelineWorker(threading.Thread):
                     if roi is not None:
                         object_detections.extend(detect_in_roi(self.object_detector, detect_input, roi))
 
+                if self.stream_mode == "focused":
+                    stream_interval = self.stream_every_n_frames
+                elif self.stream_mode == "background":
+                    stream_interval = BACKGROUND_STREAM_EVERY_N_FRAMES
+                else:
+                    stream_interval = 0
                 vis = (
                     frame.image
-                    if self.stream_frames and self.stream_every_n_frames and self._frame_counter % self.stream_every_n_frames == 0
+                    if stream_interval and self._frame_counter % stream_interval == 0
                     else None
                 )
 
@@ -403,6 +556,10 @@ class PipelineWorker(threading.Thread):
                     if seat_id is None:
                         continue
                     seen_seats.add(seat_id)
+                    if self.on_seat_observed is not None:
+                        self.on_seat_observed(self.camera_id, seat_id)
+                    if self.on_seat_detection is not None:
+                        self.on_seat_detection(self.camera_id, seat_id, p.xyxy, p.detection_confidence(), sim_time)
 
                     # Phase 1 (2026-08-21 gap fix): whether a genuine (not
                     # calibration-issue) gesture completed for this seat this
@@ -414,20 +571,24 @@ class PipelineWorker(threading.Thread):
                     gesture_active = False
                     for gesture_event in self.gesture_detector.observe(seat_id, p, sim_time):
                         if gesture_event.likely_calibration_issue:
-                            # Part 2.5: repeated same-direction hand-reach
-                            # events are a calibration signature, not N
-                            # genuine incidents — surfaced as a distinct
-                            # event type instead of flooding the alert feed
-                            # with high-risk gesture alerts.
-                            self.event_queue.put(
-                                {
-                                    "type": "calibration_warning",
-                                    "seat_id": seat_id,
-                                    "timestamp": sim_time,
-                                    "gesture": gesture_event.gesture,
-                                    "explanation": explain_calibration_warning(gesture_event),
-                                }
-                            )
+                            # Part 2.5 (2026-08-21) pushed this to the live
+                            # alert feed as a distinct event type. Accuracy
+                            # audit (2026-08-22): that made it a NOTIFICATION
+                            # in its own right, which is backwards -- this
+                            # signal exists specifically to say "this is
+                            # NOT a real incident, don't treat it as one,"
+                            # and a rough illustrative calibration can throw
+                            # this repeatedly enough to flood the invigilator
+                            # feed with exactly the noise it was meant to
+                            # suppress. It still updates
+                            # _last_calibration_warning (used as a real
+                            # defense signal in risk_engine's adjudication —
+                            # see recent_calibration_warning below) and is
+                            # still visible via the Calibration Quality
+                            # panel's own pull-based per-camera hit-rate
+                            # check, but no longer pushed as a live
+                            # push-notification event.
+                            self._last_calibration_warning[seat_id] = sim_time
                         else:
                             gesture_active = True
                             # Part A (2026-08-21 pre-demo hardening): still
@@ -492,15 +653,39 @@ class PipelineWorker(threading.Thread):
 
                     # nearest contraband detection to this seat's anchor, if any —
                     # tagged experimental in the UI, per the v1 overfitting finding.
-                    object_label = None
-                    object_conf = 0.0
+                    raw_object_label = None
+                    raw_object_conf = 0.0
+                    raw_object_center = None
                     for det in object_detections:
                         dx1, dy1, dx2, dy2 = det.xyxy
                         center = ((dx1 + dx2) / 2, (dy1 + dy2) / 2)
                         if self.seat_cal.nearest_seat(center)[0] == seat_id:
-                            object_label, object_conf = det.label, det.confidence
+                            raw_object_label, raw_object_conf = det.label, det.confidence
+                            raw_object_center = center
                             break
 
+                    # Confirmed = seen at least twice within 3s AND not
+                    # sitting suspiciously still for a long stretch (see
+                    # ObjectPersistenceTracker's docstring — a real ROI
+                    # crop of a real desk fixture, e.g. a bottle, false-
+                    # positived as "cell phone" throughout an entire real
+                    # video and this is what catches it). Not the raw
+                    # per-frame hit, is what scoring/alerting/telemetry
+                    # actually use, so a single noisy frame can't fire an
+                    # alert and a genuine object isn't thrown away just
+                    # because one frame's confidence dipped.
+                    confirmed = self.object_persistence.observe(
+                        seat_id, sim_time, raw_object_label, raw_object_conf, raw_object_center
+                    )
+                    object_label = confirmed.label if confirmed else None
+                    object_conf = confirmed.confidence if confirmed else 0.0
+                    object_duration = confirmed.duration if confirmed else 0.0
+
+                    detection_confidence = round(fused.pose_confidence, 2)
+                    camera_needs_attention = self.anchor_quality.snapshot().status == "needs_attention"
+                    recent_calibration_warning = (
+                        sim_time - self._last_calibration_warning.get(seat_id, -1e9) < self._calibration_warning_window_s
+                    )
                     assessment = self.risk_engine.observe(
                         seat_id=seat_id,
                         timestamp=sim_time,
@@ -510,13 +695,18 @@ class PipelineWorker(threading.Thread):
                         baseline_yaw_std=baseline.torso_yaw_std,
                         object_label=object_label,
                         object_confidence=object_conf,
+                        object_duration=object_duration,
                         gesture_active=gesture_active,
+                        object_class_verified=object_label in VERIFIED_OBJECT_LABELS,
+                        fused_confidence=fused.pose_confidence,
+                        camera_needs_attention=camera_needs_attention,
+                        recent_false_alarm_count=self._false_alarm_counts.get(seat_id, 0),
+                        recent_calibration_warning=recent_calibration_warning,
                     )
 
                     level = "alert" if assessment.risk_score >= 0.5 else ("elevated" if assessment.risk_score >= 0.25 else "calm")
                     seat_risk_this_frame[seat_id] = level
                     self.compute_budget.observe(seat_id, sim_time, level)
-                    detection_confidence = round(fused.pose_confidence, 2)
                     if vis is not None:
                         self._draw_person(vis, p, seat_id, level, assessment.risk_score)
 
@@ -535,6 +725,20 @@ class PipelineWorker(threading.Thread):
                     )
                     if assessment.explanation and assessment.is_alert and self._alerting_enabled():
                         evidence_url = self._capture_evidence(seat_id, assessment.triggering_event)
+                        self._seat_alert_counts[seat_id] = self._seat_alert_counts.get(seat_id, 0) + 1
+                        last_notify = self._last_notify_time.get(seat_id, -1e9)
+                        # Accuracy audit (2026-08-22): a needs_verification
+                        # alert (moderate-confidence object detection with
+                        # zero other corroboration -- the stock detector's
+                        # real false-positive band, confirmed against real
+                        # footage) never auto-notifies, cooldown or not; it's
+                        # still logged/visible for a human to check.
+                        notify = (
+                            not assessment.needs_verification
+                            and (sim_time - last_notify) >= self._notify_cooldown_s
+                        )
+                        if notify:
+                            self._last_notify_time[seat_id] = sim_time
                         self.event_queue.put(
                             {
                                 "type": "alert",
@@ -545,6 +749,22 @@ class PipelineWorker(threading.Thread):
                                 "object_label": object_label,
                                 "confidence": detection_confidence,
                                 "evidence_url": evidence_url,
+                                # Part 2b: the deterministic prosecution/defense
+                                # checklist behind this alert - shown to the
+                                # invigilator as an inspectable list, not
+                                # hidden reasoning.
+                                "prosecution": [f.__dict__ for f in assessment.prosecution],
+                                "defense": [f.__dict__ for f in assessment.defense],
+                                # Accuracy audit (2026-08-22): every alert is
+                                # still logged/persisted, but only a
+                                # "notify"=true one should interrupt the
+                                # invigilator (toast/audio) -- a recurring
+                                # pattern for the same seat within
+                                # _notify_cooldown_s reads as an occurrence
+                                # count instead of a fresh pop-up each time.
+                                "notify": notify,
+                                "occurrence": self._seat_alert_counts[seat_id],
+                                "needs_verification": assessment.needs_verification,
                             }
                         )
 
@@ -561,6 +781,7 @@ class PipelineWorker(threading.Thread):
                     self.event_queue.put(
                         {
                             "type": "heartbeat",
+                            "camera_id": self.camera_id,
                             "timestamp": sim_time,
                             "wall_time": now,
                             "object_detector_finetuned": self.object_detector_is_finetuned,
@@ -584,12 +805,25 @@ class PipelineWorker(threading.Thread):
         cv2.putText(vis, label, (x1, max(0, y1 - 8)), cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 2)
 
     def _emit_frame(self, image, sim_time: float) -> None:
-        small = cv2.resize(image, (480, int(image.shape[0] * 480 / image.shape[1])))
-        ok, buf = cv2.imencode(".jpg", small, [cv2.IMWRITE_JPEG_QUALITY, 65])
+        # Dashboard grid (2026-08-22): a "background"-mode frame is a grid
+        # thumbnail, not a full feed — smaller resize, more compression,
+        # since it's rendered small and infrequently. "focused" keeps the
+        # original size/quality for the one tile actually being watched.
+        if self.stream_mode == "background":
+            width, quality = 240, 55
+        else:
+            width, quality = 480, 65
+        small = cv2.resize(image, (width, int(image.shape[0] * width / image.shape[1])))
+        ok, buf = cv2.imencode(".jpg", small, [cv2.IMWRITE_JPEG_QUALITY, quality])
         if not ok:
             return
         b64 = base64.b64encode(buf).decode("ascii")
-        self.event_queue.put({"type": "frame", "timestamp": sim_time, "image": b64})
+        # camera_id tag (2026-08-22): previously only one worker ever
+        # streamed at all, so "frame" events were implicitly single-source.
+        # Now that multiple workers can stream at once, every frame event
+        # must say which camera it's from so the frontend can route it to
+        # the right tile instead of overwriting one global image.
+        self.event_queue.put({"type": "frame", "camera_id": self.camera_id, "timestamp": sim_time, "image": b64})
 
     def _capture_evidence(self, seat_id: str, event) -> Optional[str]:
         """docs/architecture.md §9/§11: face-blurred evidence clip for a

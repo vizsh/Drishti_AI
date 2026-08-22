@@ -1,14 +1,15 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { Video, VideoOff, X, AlertTriangle, CameraOff } from 'lucide-react'
+import { Video, VideoOff, X, AlertTriangle, CameraOff, Unplug, Plug, Loader2 } from 'lucide-react'
 import { LiveFeed } from '../components/LiveFeed'
 import { Badge } from '../components/Badge'
 import { ValueStats } from '../components/ValueStats'
 import { EmptyState } from '../components/EmptyState'
 import { useLive } from '../state/LiveContext'
 import { useHallScope, type CameraInfo } from '../state/useHallScope'
-import { riskLevel, type StatusLevel } from '../lib/colors'
+import { type StatusLevel } from '../lib/colors'
+import { severityForCamera } from '../lib/cameraSeverity'
 
 /**
  * Phase 2 — Command Center: the default landing view after login. A real
@@ -19,73 +20,63 @@ import { riskLevel, type StatusLevel } from '../lib/colors'
  */
 export function CommandCenterPage() {
   const navigate = useNavigate()
-  const { seats, feedImage, detectorFinetuned, lightingEnhanced } = useLive()
-  const { cameras, halls } = useHallScope()
+  const { seats, feedImages, detectorFinetuned, lightingEnhanced, setStreamMode } = useLive()
+  const { cameras, halls, refreshCameras } = useHallScope()
   const [focusedId, setFocusedId] = useState<string | null>(null)
+  const [togglingId, setTogglingId] = useState<string | null>(null)
 
-  // Snapshot throttling (Problem 3 / Performance Note): this project has
-  // only one real camera video feed, so there's a single physical stream
-  // arriving over the WebSocket regardless of focus state — the backend
-  // doesn't yet support per-camera subscription teardown. What IS real
-  // here: grid tiles only repaint every 4s from that stream instead of on
-  // every frame, and only the focused tile renders continuously. A genuine
-  // render-cost reduction, not a network-level one — worth being precise
-  // about rather than implying a capability that doesn't exist yet.
-  const [snapshot, setSnapshot] = useState<string | null>(null)
-  const lastSnapshotAt = useRef(0)
-  useEffect(() => {
-    if (!feedImage) return
-    const now = Date.now()
-    if (now - lastSnapshotAt.current > 4000) {
-      lastSnapshotAt.current = now
-      setSnapshot(feedImage)
+  async function toggleConnection(cam: CameraInfo) {
+    setTogglingId(cam.camera_id)
+    try {
+      const action = cam.disconnected ? 'reconnect' : 'disconnect'
+      await fetch(`/api/setup/cameras/${cam.camera_id}/${action}`, { method: 'POST' })
+      await refreshCameras()
+    } finally {
+      setTogglingId(null)
     }
-  }, [feedImage])
+  }
+
+  // Dashboard grid fix (2026-08-22): every camera with its own worker now
+  // streams a low-rate "background" thumbnail on its own — this page just
+  // needs to ask for it once per camera in scope, instead of relying on a
+  // single hardcoded primary. Grid tiles read straight from feedImages
+  // (already backend-throttled); only the opened single-feed view below
+  // asks for "focused" (full rate), and drops back to "background" on close.
+  useEffect(() => {
+    for (const cam of cameras) {
+      if (cam.has_own_worker) setStreamMode(cam.camera_id, 'background')
+    }
+  }, [cameras, setStreamMode])
 
   const focused = cameras.find((c) => c.camera_id === focusedId)
 
-  function severityFor(cam: CameraInfo): { level: StatusLevel; count: number; worstSeat: string | null } {
-    let level: StatusLevel = 'calm'
-    let count = 0
-    let worstSeat: string | null = null
-    for (const seatId of cam.seats) {
-      const s = seats[seatId]
-      if (!s?.calibrated) continue
-      const l = riskLevel(s.risk)
-      if (l === 'critical') {
-        level = 'critical'
-        count += 1
-        worstSeat = seatId
-      } else if (l === 'watch' && level !== 'critical') {
-        level = 'watch'
-        count += 1
-        if (!worstSeat) worstSeat = seatId
-      }
-    }
-    return { level, count, worstSeat }
-  }
-
   function openTile(cam: CameraInfo) {
-    const sev = severityFor(cam)
+    const sev = severityForCamera(cam, seats)
     if (sev.level === 'critical' && sev.worstSeat) {
       // Flagged tile -> straight into the investigation view (Phase 3).
       navigate(`/seat/${sev.worstSeat}`)
     } else if (cam.streams_live_feed) {
       // Calm tile -> lightweight single-feed live view, this page only.
       setFocusedId(cam.camera_id)
+      setStreamMode(cam.camera_id, 'focused')
     }
+  }
+
+  function closeFocused() {
+    if (focused) setStreamMode(focused.camera_id, 'background')
+    setFocusedId(null)
   }
 
   if (focused) {
     return (
       <div>
         <button
-          onClick={() => setFocusedId(null)}
+          onClick={closeFocused}
           className="flex items-center gap-1.5 text-xs mono px-3 py-1.5 rounded-lg border border-white/12 mb-4 hover:border-white/30"
         >
           <X size={13} /> close live view — back to command center
         </button>
-        <LiveFeed feedImage={feedImage} detectorFinetuned={detectorFinetuned} lightingEnhanced={lightingEnhanced} />
+        <LiveFeed feedImage={feedImages[focused.camera_id] ?? null} detectorFinetuned={detectorFinetuned} lightingEnhanced={lightingEnhanced} />
         <p className="text-[10px] mono text-white/30 mt-3">covers: {focused.seats.map((s) => s.toUpperCase()).join(', ') || 'no seats calibrated'}</p>
       </div>
     )
@@ -116,7 +107,15 @@ export function CommandCenterPage() {
             <h2 className="text-sm font-bold uppercase tracking-wide mb-3 text-white/60">{hall}</h2>
             <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
               {hallCameras.map((cam) => (
-                <CameraTile key={cam.camera_id} cam={cam} snapshot={snapshot} severity={severityFor(cam)} onOpen={() => openTile(cam)} />
+                <CameraTile
+                  key={cam.camera_id}
+                  cam={cam}
+                  snapshot={feedImages[cam.camera_id] ?? null}
+                  severity={severityForCamera(cam, seats)}
+                  onOpen={() => openTile(cam)}
+                  onToggleConnection={() => toggleConnection(cam)}
+                  toggling={togglingId === cam.camera_id}
+                />
               ))}
             </div>
           </div>
@@ -134,34 +133,44 @@ function CameraTile({
   snapshot,
   severity,
   onOpen,
+  onToggleConnection,
+  toggling,
 }: {
   cam: CameraInfo
   snapshot: string | null
   severity: { level: StatusLevel; count: number }
   onOpen: () => void
+  onToggleConnection: () => void
+  toggling: boolean
 }) {
-  const clickable = cam.streams_live_feed || severity.level === 'critical'
+  const clickable = !cam.disconnected && (cam.streams_live_feed || severity.level === 'critical')
   return (
     <motion.div
       whileHover={clickable ? { scale: 1.02 } : {}}
       onClick={clickable ? onOpen : undefined}
-      animate={severity.level === 'critical' ? { borderColor: [BORDER_COLOR.critical, '#ff5a36ff', BORDER_COLOR.critical] } : {}}
-      transition={{ duration: 1.6, repeat: severity.level === 'critical' ? Infinity : 0 }}
-      className={`rounded-2xl border overflow-hidden ${clickable ? 'cursor-pointer' : ''} ${GLOW[severity.level]}`}
-      style={{ borderColor: BORDER_COLOR[severity.level] }}
+      animate={!cam.disconnected && severity.level === 'critical' ? { borderColor: [BORDER_COLOR.critical, '#ff5a36ff', BORDER_COLOR.critical] } : {}}
+      transition={{ duration: 1.6, repeat: !cam.disconnected && severity.level === 'critical' ? Infinity : 0 }}
+      className={`rounded-2xl border overflow-hidden ${clickable ? 'cursor-pointer' : ''} ${cam.disconnected ? 'opacity-50' : GLOW[severity.level]}`}
+      style={{ borderColor: cam.disconnected ? '#ffffff14' : BORDER_COLOR[severity.level] }}
     >
       <div className="relative" style={{ aspectRatio: '16/10', background: '#000' }}>
-        {cam.streams_live_feed && snapshot ? (
+        {!cam.disconnected && cam.streams_live_feed && snapshot ? (
           <img src={snapshot} className="w-full h-full object-cover opacity-90" />
         ) : (
           <div className="w-full h-full flex items-center justify-center">
-            {cam.streams_live_feed ? <Video size={20} className="text-white/20" /> : <VideoOff size={20} className="text-white/20" />}
+            {cam.disconnected ? (
+              <Unplug size={20} className="text-white/25" />
+            ) : cam.streams_live_feed ? (
+              <Video size={20} className="text-white/20" />
+            ) : (
+              <VideoOff size={20} className="text-white/20" />
+            )}
           </div>
         )}
         <div className="absolute top-2 left-2">
-          <Badge tone="neutral">{cam.is_simulated ? 'SIMULATED' : 'LIVE'}</Badge>
+          <Badge tone="neutral">{cam.disconnected ? 'DISCONNECTED' : cam.is_simulated ? 'SIMULATED' : 'LIVE'}</Badge>
         </div>
-        {severity.level !== 'calm' && (
+        {!cam.disconnected && severity.level !== 'calm' && (
           <div className="absolute top-2 right-2">
             <Badge tone={severity.level}>
               <AlertTriangle size={10} /> {severity.count}
@@ -170,9 +179,29 @@ function CameraTile({
         )}
       </div>
       <div className="p-3">
-        <div className="text-xs font-bold mb-1">{cam.camera_id}</div>
+        <div className="flex items-center justify-between gap-2 mb-1">
+          <div className="text-xs font-bold">{cam.camera_id}</div>
+          <button
+            onClick={(e) => {
+              e.stopPropagation()
+              onToggleConnection()
+            }}
+            disabled={toggling}
+            className="flex items-center gap-1 text-[9px] mono px-2 py-1 rounded-md border border-white/12 text-white/50 hover:border-white/30 hover:text-white/80 disabled:opacity-40 shrink-0"
+            title={cam.disconnected ? 'Reconnect this camera' : 'Disconnect this camera (stops its pipeline; reversible)'}
+          >
+            {toggling ? <Loader2 size={10} className="animate-spin" /> : cam.disconnected ? <Plug size={10} /> : <Unplug size={10} />}
+            {toggling ? '…' : cam.disconnected ? 'reconnect' : 'disconnect'}
+          </button>
+        </div>
         <div className="text-[10px] mono text-white/40">
-          {cam.streams_live_feed ? 'streaming' : 'fusion-only · no visual feed'} · {cam.seats.length} seat{cam.seats.length === 1 ? '' : 's'}
+          {cam.disconnected
+            ? 'source disconnected — no pipeline running'
+            : cam.streams_live_feed
+              ? 'streaming'
+              : 'fusion-only · no visual feed'}{' '}
+          · {cam.seats.length} seat{cam.seats.length === 1 ? '' : 's'}
+          {(cam.video_paths?.length ?? 0) > 1 && ` · ${cam.video_paths!.length}-video playlist`}
         </div>
       </div>
     </motion.div>

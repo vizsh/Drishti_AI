@@ -1,12 +1,29 @@
 import { useState } from 'react'
-import { Link } from 'react-router-dom'
-import { ArrowLeft, Plus, Trash2, Save, CheckCircle2, Loader2 } from 'lucide-react'
+import { Plus, Trash2, Save, CheckCircle2, Loader2, UploadCloud, Radar, ShieldCheck, ShieldAlert, Eye, ScanLine } from 'lucide-react'
 import { CoveragePanel } from '../components/CoveragePanel'
+import { ExamTypeSelector } from '../components/ExamTypeSelector'
+import { RoomScanOverlay } from '../components/RoomScanOverlay'
+import { useHallScope } from '../state/useHallScope'
 
 interface SeatEntry {
   seatId: string
   x: string
   y: string
+}
+
+interface BlindSpotSeat {
+  seat_id: string
+  seen_by: string[]
+  status: 'seen_by_both' | 'seen_by_one' | 'blind_spot'
+}
+
+interface BlindSpotResult {
+  duration_seconds: number
+  cameras: string[]
+  seats: BlindSpotSeat[]
+  blind_spot_count: number
+  single_camera_count: number
+  dual_camera_count: number
 }
 
 interface CameraForm {
@@ -56,12 +73,22 @@ function blankCamera(n: number): CameraForm {
 // pair. No separate "enable fusion" step: configuring overlapping seats
 // IS the fusion wiring.
 export function LabSetupPage() {
+  // Room sensing scan (2026-08-22) targets whatever is actually deployed
+  // right now, not just this unsaved form's in-progress fields — the
+  // interesting cameras to scan are usually ones already configured from
+  // an earlier session, not the blank form this page always starts with.
+  const { allCameras: deployedCameras, refreshCameras: refreshDeployedCameras } = useHallScope()
   const [hall, setHall] = useState('Hall A')
   const [cameras, setCameras] = useState<CameraForm[]>([blankCamera(1)])
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [coverageKey, setCoverageKey] = useState(0)
+  const [uploadingIdx, setUploadingIdx] = useState<number | null>(null)
+  const [blindSpot, setBlindSpot] = useState<BlindSpotResult | null>(null)
+  const [blindSpotRunning, setBlindSpotRunning] = useState(false)
+  const [blindSpotError, setBlindSpotError] = useState<string | null>(null)
+  const [scanningCameraId, setScanningCameraId] = useState<string | null>(null)
 
   function addCamera() {
     setCameras((prev) => [...prev, blankCamera(prev.length + 1)])
@@ -126,6 +153,7 @@ export function LabSetupPage() {
       if (!res.ok) throw new Error(`save failed (${res.status})`)
       setSaved(true)
       setCoverageKey((k) => k + 1)
+      await refreshDeployedCameras()
     } catch (e) {
       setError(e instanceof Error ? e.message : 'save failed')
     } finally {
@@ -133,12 +161,57 @@ export function LabSetupPage() {
     }
   }
 
+  // Part 1b: a user-uploaded video is treated as a genuine LIVE feed, not a
+  // batch replay — the backend spins up a simulated real-time-paced RTSP
+  // stream (ffmpeg -re + mediamtx) serving the file back out, and we plug
+  // THAT rtsp:// URL into the camera's video_path field, exactly as if
+  // typing in a real camera's address by hand. No separate "uploaded video"
+  // code path exists downstream of this point.
+  async function handleUpload(camIdx: number, file: File) {
+    setUploadingIdx(camIdx)
+    setError(null)
+    try {
+      const form = new FormData()
+      form.append('file', file)
+      const res = await fetch('/api/setup/upload-video', { method: 'POST', body: form })
+      if (!res.ok) throw new Error(`upload failed (${res.status})`)
+      const data = await res.json()
+      updateCamera(camIdx, { videoPath: data.rtsp_url, isSimulated: true })
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'upload failed')
+    } finally {
+      setUploadingIdx(null)
+    }
+  }
+
+  // Part 1a: LIVE blind-spot analysis — opens a short window during which
+  // the already-running pipeline's real detections are tallied per seat per
+  // camera, distinct from (and in addition to) CoveragePanel's static
+  // geometric /api/coverage check below.
+  async function runBlindSpotAnalysis() {
+    setBlindSpotRunning(true)
+    setBlindSpotError(null)
+    try {
+      const res = await fetch('/api/setup/blind-spot-analysis', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ duration_seconds: 8 }),
+      })
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}))
+        throw new Error(body.detail ?? `analysis failed (${res.status})`)
+      }
+      setBlindSpot(await res.json())
+    } catch (e) {
+      setBlindSpotError(e instanceof Error ? e.message : 'analysis failed')
+    } finally {
+      setBlindSpotRunning(false)
+    }
+  }
+
   return (
     <div className="max-w-3xl">
-      <Link to="/settings" className="flex items-center gap-1.5 text-xs mono text-white/50 hover:text-white mb-4 w-fit">
-        <ArrowLeft size={13} /> back to settings
-      </Link>
-      <h1 className="text-lg font-bold mb-1">Multi-Camera Lab Setup</h1>
+      <h1 className="text-lg font-bold mb-1">Lab Setup</h1>
       <p className="text-xs text-white/50 mb-6">
         Configure this hall's cameras and which seats each one covers — restarts the live pipeline against the new
         config, no manual file editing or app restart needed.
@@ -176,6 +249,30 @@ export function LabSetupPage() {
             />
             <Field label="image width (px)" value={cam.imageWidth} onChange={(v) => updateCamera(i, { imageWidth: v })} />
             <Field label="image height (px)" value={cam.imageHeight} onChange={(v) => updateCamera(i, { imageHeight: v })} />
+          </div>
+
+          <div className="mb-4">
+            <label className="flex items-center gap-2 text-[11px] mono text-white/50 px-3 py-2 rounded-lg border border-white/12 hover:border-white/25 cursor-pointer w-fit">
+              {uploadingIdx === i ? <Loader2 size={13} className="animate-spin" /> : <UploadCloud size={13} />}
+              {uploadingIdx === i ? 'starting simulated live stream…' : 'or upload a video — served back as a real-time live feed'}
+              <input
+                type="file"
+                accept="video/*"
+                className="hidden"
+                disabled={uploadingIdx !== null}
+                onChange={(e) => {
+                  const file = e.target.files?.[0]
+                  if (file) void handleUpload(i, file)
+                  e.target.value = ''
+                }}
+              />
+            </label>
+            {cam.videoPath.startsWith('rtsp://127.0.0.1') && (
+              <p className="text-[10px] mono text-calm mt-1.5">
+                streaming from a local simulated RTSP source at real-time pace (looped) — the pipeline consumes it
+                exactly as it would a live camera, not a batch file read.
+              </p>
+            )}
           </div>
 
           <label className="flex items-center gap-2 text-[11px] mono text-white/50 mb-4">
@@ -267,11 +364,97 @@ export function LabSetupPage() {
         {error && <span className="text-xs text-critical">{error}</span>}
       </div>
 
+      {deployedCameras.length > 0 && (
+        <div className="rounded-2xl border border-white/8 p-5 mb-6" style={{ background: 'linear-gradient(180deg, #ffffff06, #ffffff01)' }}>
+          <div className="flex items-center gap-2 mb-1">
+            <ScanLine size={14} className="text-white/50" />
+            <h2 className="text-sm font-bold uppercase tracking-wide">Room sensing scan</h2>
+          </div>
+          <p className="text-[11px] mono text-white/40 mb-3">
+            runs a real, short detection pass on a currently deployed camera and shows exactly what it sees — real
+            bounding boxes, real confidence, real blind spots — not a mockup
+          </p>
+          <div className="flex flex-wrap gap-2">
+            {deployedCameras
+              .filter((cam) => cam.has_own_worker)
+              .map((cam) => (
+                <button
+                  key={cam.camera_id}
+                  onClick={() => setScanningCameraId(cam.camera_id)}
+                  className="flex items-center gap-1.5 text-[11px] mono px-3 py-2 rounded-lg border border-white/15 text-white/70 hover:border-white/30 disabled:opacity-40"
+                >
+                  <ScanLine size={12} /> scan {cam.camera_id}
+                </button>
+              ))}
+          </div>
+        </div>
+      )}
+
       {saved && (
         <div>
           <h2 className="text-sm font-bold uppercase tracking-wide mb-3">Coverage summary</h2>
           <CoveragePanel key={coverageKey} />
+
+          {cameras.length >= 2 && (
+            <div className="rounded-2xl border border-white/8 p-5 mb-6" style={{ background: 'linear-gradient(180deg, #ffffff06, #ffffff01)' }}>
+              <div className="flex items-center justify-between mb-3 flex-wrap gap-3">
+                <div>
+                  <h2 className="text-sm font-bold uppercase tracking-wide flex items-center gap-2">
+                    <Eye size={14} className="text-white/50" /> Live blind-spot analysis
+                  </h2>
+                  <p className="text-[11px] mono text-white/40 mt-0.5">
+                    watches real detections from each camera for a few seconds — catches occlusion (monitors, other
+                    students, doorframes) the static geometric check above can't see
+                  </p>
+                </div>
+                <button
+                  onClick={runBlindSpotAnalysis}
+                  disabled={blindSpotRunning}
+                  className="flex items-center gap-1.5 text-[11px] mono uppercase px-3 py-1.5 rounded-full border border-white/15 hover:border-white/30 transition disabled:opacity-50"
+                >
+                  <Radar size={12} className={blindSpotRunning ? 'animate-spin' : ''} />
+                  {blindSpotRunning ? 'analyzing (8s)…' : 'run live analysis'}
+                </button>
+              </div>
+
+              {blindSpotError && <p className="text-xs text-critical mb-2">{blindSpotError}</p>}
+
+              {blindSpot && (
+                <>
+                  <div className="grid grid-cols-3 sm:grid-cols-6 gap-2 mb-3">
+                    {blindSpot.seats.map((s) => {
+                      const color = s.status === 'seen_by_both' ? '#8dff9e' : s.status === 'seen_by_one' ? '#ffb020' : '#ff5a36'
+                      const label = s.status === 'seen_by_both' ? 'both cameras' : s.status === 'seen_by_one' ? '1 camera' : 'blind spot'
+                      return (
+                        <div key={s.seat_id} className="rounded-xl p-3 text-center border" style={{ borderColor: `${color}35`, background: `${color}0a` }}>
+                          <div className="flex justify-center mb-1">
+                            {s.status === 'blind_spot' ? <ShieldAlert size={16} color={color} /> : <ShieldCheck size={16} color={color} />}
+                          </div>
+                          <div className="text-[11px] font-bold">{s.seat_id.replace('_', ' ').toUpperCase()}</div>
+                          <div className="text-[9px] mono mt-0.5" style={{ color }}>{label}</div>
+                        </div>
+                      )
+                    })}
+                  </div>
+                  <p className="text-xs mono" style={{ color: blindSpot.blind_spot_count === 0 ? '#8dff9e' : '#ff5a36' }}>
+                    over {blindSpot.duration_seconds}s of live footage: {blindSpot.dual_camera_count} seat(s) seen by
+                    both cameras, {blindSpot.single_camera_count} by exactly one, {blindSpot.blind_spot_count} seen by
+                    neither.
+                  </p>
+                </>
+              )}
+            </div>
+          )}
+
+          <div>
+            <h2 className="text-sm font-bold uppercase tracking-wide mb-3">Exam type</h2>
+            <ExamTypeSelector />
+          </div>
         </div>
+      )}
+
+      {scanningCameraId && (
+        <RoomScanOverlay cameraId={scanningCameraId} onClose={() => setScanningCameraId(null)} />
       )}
     </div>
   )

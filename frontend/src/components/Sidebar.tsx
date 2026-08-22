@@ -1,10 +1,18 @@
 import { NavLink } from 'react-router-dom'
-import { LayoutGrid, Grid3x3, Bell, FolderOpen, BarChart3, Settings, LogOut, Radar } from 'lucide-react'
+import { LayoutGrid, LayoutDashboard, Grid3x3, Bell, FolderOpen, BarChart3, Settings, LogOut, Radar, ScanLine } from 'lucide-react'
 import { useAuth } from '../state/AuthContext'
 
+// Lab Setup promoted out of Settings (2026-08-22) — configuring the
+// physical deployment (cameras, calibration, room-sensing scan) is a
+// primary task for whoever runs this system, not a buried settings
+// sub-page. Every setup feature (multi-camera calibration, live blind-
+// spot analysis, video-upload-as-live-feed, exam type, the room-scan
+// animation) lives at this one entry point.
 const NAV_ITEMS = [
+  { to: '/dashboard', label: 'Dashboard', icon: LayoutDashboard },
   { to: '/command-center', label: 'Command Center', icon: LayoutGrid },
   { to: '/overview', label: 'Examination Hall', icon: Grid3x3 },
+  { to: '/lab-setup', label: 'Lab Setup', icon: ScanLine },
   { to: '/alerts', label: 'Alerts', icon: Bell },
   { to: '/evidence-vault', label: 'Evidence Vault', icon: FolderOpen },
   { to: '/analytics', label: 'Analytics', icon: BarChart3 },

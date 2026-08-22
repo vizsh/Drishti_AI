@@ -14,6 +14,13 @@ export interface RiskPoint {
   risk: number
 }
 
+export interface AdjudicationFinding {
+  signal: string
+  label: string
+  detail: string
+  disqualifying: boolean
+}
+
 export interface AlertItem {
   id: string
   kind: 'alert' | 'gesture' | 'calibration_warning'
@@ -24,11 +31,17 @@ export interface AlertItem {
   explanation: string
   objectLabel?: string | null
   evidenceUrl?: string | null
+  prosecution?: AdjudicationFinding[]
+  defense?: AdjudicationFinding[]
+  notify?: boolean
+  occurrence?: number
+  needsVerification?: boolean
 }
 
 export interface WsEvent {
   type: string
   seat_id?: string
+  camera_id?: string
   timestamp?: number
   risk_score?: number
   yaw_z?: number | null
@@ -45,4 +58,9 @@ export interface WsEvent {
   object_detector_finetuned?: boolean
   lighting_enhanced?: boolean
   message?: string
+  prosecution?: AdjudicationFinding[]
+  defense?: AdjudicationFinding[]
+  notify?: boolean
+  occurrence?: number
+  needs_verification?: boolean
 }

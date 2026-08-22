@@ -1,6 +1,6 @@
 import { Link } from 'react-router-dom'
 import { useState } from 'react'
-import { Settings as SettingsIcon, ShieldCheck, ChevronRight, PlayCircle, Camera, Volume2, VolumeX } from 'lucide-react'
+import { Settings as SettingsIcon, ShieldCheck, ChevronRight, PlayCircle, Volume2, VolumeX } from 'lucide-react'
 import { useAuth, DEMO_ACCOUNTS } from '../state/AuthContext'
 import { ExamTypeSelector } from '../components/ExamTypeSelector'
 import { setAudioMuted, isAudioMuted } from '../lib/audio'
@@ -61,17 +61,6 @@ export function SettingsPage() {
           <p className="text-xs text-white/50">A scripted, end-to-end walkthrough of the whole product — under two minutes, no live camera needed</p>
         </div>
         <PlayCircle size={16} className="text-white/30 shrink-0" />
-      </Link>
-
-      <Link
-        to="/lab-setup"
-        className="flex items-center justify-between rounded-2xl border border-white/8 p-5 mb-5 max-w-lg bg-white/3 hover:border-white/20 transition-colors"
-      >
-        <div>
-          <h2 className="text-sm font-bold uppercase tracking-wide mb-1">Multi-Camera Lab Setup</h2>
-          <p className="text-xs text-white/50">Add cameras, assign seats, and get a coverage summary — no config file editing</p>
-        </div>
-        <Camera size={16} className="text-white/30 shrink-0" />
       </Link>
 
       <Link

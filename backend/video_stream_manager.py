@@ -12,8 +12,10 @@ ingestion/video_source.py's is_live code path has no special case for
 
 from __future__ import annotations
 
+import re
 import shutil
 import subprocess
+import sys
 import threading
 from pathlib import Path
 from typing import Optional
@@ -106,3 +108,57 @@ def stop_all_streams() -> None:
         names = list(_streams.keys())
     for name in names:
         stop_live_stream(name)
+
+
+_STREAM_URL_RE = re.compile(rf"rtsp://127\.0\.0\.1:{RTSP_PORT}/([A-Za-z0-9_]+)")
+
+
+def stop_stream_for_url(video_path: str) -> bool:
+    """Stops the ffmpeg relay behind a rtsp://127.0.0.1:8554/<name> URL, if
+    that's what video_path is. Real cameras' rtsp:// URLs (a different host)
+    fall straight through as a no-op. This is what disconnect_camera() was
+    missing — it took the camera out of the live pipeline but never told
+    the underlying ffmpeg process pushing the uploaded file to stop, so the
+    -stream_loop -1 process just kept looping forever in the background."""
+    match = _STREAM_URL_RE.fullmatch(video_path.strip())
+    if not match:
+        return False
+    stop_live_stream(match.group(1))
+    return True
+
+
+def reap_stray_processes() -> int:
+    """Startup guard (2026-08-22): if the backend process was killed/
+    restarted while a live-upload stream was running, the ffmpeg/mediamtx
+    child processes it spawned survive the restart as orphans — the new
+    backend's _streams dict starts empty and has no PID to stop them, so
+    they loop forever until someone finds and kills them by hand (the exact
+    "stuck in a loop, won't stop" bug reported live). Called once at
+    startup to kill any ffmpeg process still running with our -stream_loop
+    signature, plus any mediamtx.exe, before this process starts tracking
+    its own. Windows-only (dev/demo tooling for the upload-as-live-feed
+    path, not part of the Jetson deployment target) — a no-op elsewhere."""
+    if sys.platform != "win32":
+        return 0
+    killed = 0
+    try:
+        result = subprocess.run(
+            ["wmic", "process", "where",
+             "name='ffmpeg.exe' or name='mediamtx.exe'",
+             "get", "ProcessId,CommandLine"],
+            capture_output=True, text=True, timeout=10,
+        )
+        for line in result.stdout.splitlines():
+            line = line.strip()
+            if not line or "ProcessId" in line:
+                continue
+            if "stream_loop" not in line and "mediamtx.exe" not in line:
+                continue
+            pid = line.split()[-1]
+            if not pid.isdigit():
+                continue
+            subprocess.run(["taskkill", "/F", "/PID", pid], capture_output=True, timeout=5)
+            killed += 1
+    except Exception:
+        pass  # best-effort — never block backend startup on this
+    return killed

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Plus, Trash2, Save, CheckCircle2, Loader2, UploadCloud, Radar, ShieldCheck, ShieldAlert, Eye, ScanLine } from 'lucide-react'
 import { CoveragePanel } from '../components/CoveragePanel'
 import { ExamTypeSelector } from '../components/ExamTypeSelector'
@@ -89,6 +89,55 @@ export function LabSetupPage() {
   const [blindSpotRunning, setBlindSpotRunning] = useState(false)
   const [blindSpotError, setBlindSpotError] = useState<string | null>(null)
   const [scanningCameraId, setScanningCameraId] = useState<string | null>(null)
+  const [loadedHall, setLoadedHall] = useState<string | null>(null)
+
+  // Bug fix (2026-08-22): this form used to always start from a single
+  // blank camera regardless of which hall was picked. Saving then replaced
+  // that hall's ENTIRE camera list with whatever was in the form —
+  // silently deleting any already-configured cameras for that hall (this
+  // destroyed the real cam04_illustrative entry in production use, twice).
+  // Now the form loads whatever's already deployed for the selected hall
+  // before allowing a save, so "add one camera and save" only adds to a
+  // hall instead of wiping it.
+  useEffect(() => {
+    let cancelled = false
+    fetch('/api/setup/config')
+      .then((r) => r.json())
+      .then((raw) => {
+        if (cancelled) return
+        const hallOf: Record<string, string> = raw.halls ?? {}
+        const existing = (raw.cameras ?? []).filter((c: any) => (hallOf[c.camera_id] ?? 'Hall A') === hall)
+        setCameras(
+          existing.length > 0
+            ? existing.map((c: any) => ({
+                cameraId: c.camera_id,
+                videoPath: c.video_path,
+                imageWidth: String(c.image_width),
+                imageHeight: String(c.image_height),
+                isSimulated: !!c.is_simulated,
+                imagePoints: (c.image_points ?? blankCamera(1).imagePoints.map((p) => p.map(Number))).map(
+                  (p: [number, number]) => [String(p[0]), String(p[1])]
+                ),
+                planePoints: (c.plane_points ?? blankCamera(1).planePoints.map((p) => p.map(Number))).map(
+                  (p: [number, number]) => [String(p[0]), String(p[1])]
+                ),
+                seats: Object.entries(c.seats ?? {}).length > 0
+                  ? Object.entries(c.seats ?? {}).map(([seatId, xy]) => ({
+                      seatId,
+                      x: String((xy as [number, number])[0]),
+                      y: String((xy as [number, number])[1]),
+                    }))
+                  : [{ seatId: '', x: '', y: '' }],
+              }))
+            : [blankCamera(1)]
+        )
+        setLoadedHall(hall)
+      })
+      .catch(() => setCameras([blankCamera(1)]))
+    return () => {
+      cancelled = true
+    }
+  }, [hall])
 
   function addCamera() {
     setCameras((prev) => [...prev, blankCamera(prev.length + 1)])
@@ -215,6 +264,12 @@ export function LabSetupPage() {
       <p className="text-xs text-white/50 mb-6">
         Configure this hall's cameras and which seats each one covers — restarts the live pipeline against the new
         config, no manual file editing or app restart needed.
+        {loadedHall === hall && (
+          <span className="block mt-1 text-white/30">
+            showing {cameras.length === 1 && !cameras[0].videoPath ? 'no' : cameras.length} existing camera
+            {cameras.length === 1 ? '' : 's'} already configured for {hall} — saving adds to this, it doesn't replace it.
+          </span>
+        )}
       </p>
 
       <div className="rounded-2xl border border-white/8 p-5 mb-5 bg-white/3">

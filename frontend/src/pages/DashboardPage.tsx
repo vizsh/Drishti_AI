@@ -1,7 +1,7 @@
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { motion } from 'framer-motion'
-import { AlertTriangle, CameraOff, ShieldCheck, Video, VideoOff, Unplug } from 'lucide-react'
+import { AlertTriangle, CameraOff, ShieldCheck, Video, VideoOff, Unplug, Plug } from 'lucide-react'
 import { useLive } from '../state/LiveContext'
 import { useHallScope, type CameraInfo } from '../state/useHallScope'
 import { severityForCamera } from '../lib/cameraSeverity'
@@ -24,7 +24,19 @@ const STRIP_COLOR = { calm: '', watch: '#ffb648', critical: '#ff5a36' } as const
 export function DashboardPage() {
   const navigate = useNavigate()
   const { seats, alerts, feedImages, setStreamMode } = useLive()
-  const { cameras, halls } = useHallScope()
+  const { cameras, halls, refreshCameras } = useHallScope()
+  const [toggling, setToggling] = useState<string | null>(null)
+
+  async function toggleConnection(cam: CameraInfo) {
+    setToggling(cam.camera_id)
+    try {
+      const action = cam.disconnected ? 'reconnect' : 'disconnect'
+      await fetch(`/api/setup/cameras/${cam.camera_id}/${action}`, { method: 'POST' })
+      await refreshCameras()
+    } finally {
+      setToggling(null)
+    }
+  }
 
   // Every camera that has its own worker streams a low-rate background
   // thumbnail while this page is open — the fix for "only one of them is
@@ -35,14 +47,18 @@ export function DashboardPage() {
     }
   }, [cameras, setStreamMode])
 
-  // Most recent alert per seat, so a camera's tile can show the actual
-  // real explanation text ("seat_5 — cell phone detected...") rather than
-  // a generic "warning" — pulled from the same live alert feed every other
-  // page reads, not a second data path.
+  // Most recent NOTIFY-WORTHY alert per seat, so a camera's tile can show
+  // the actual real explanation text ("seat_5 — cell phone detected...")
+  // rather than a generic "warning" — pulled from the same live alert feed
+  // every other page reads, not a second data path. Deliberately excludes
+  // notify:false alerts (e.g. a needs_verification hit still on its first
+  // occurrence) — a tile is not supposed to react to every fluctuation in
+  // a student's ordinary movement, only to something that actually cleared
+  // the same review bar the Alert Inbox uses.
   const latestAlertBySeat = useMemo(() => {
     const map = new Map<string, AlertItem>()
     for (const a of alerts) {
-      if (a.kind !== 'alert') continue
+      if (a.kind !== 'alert' || a.notify === false) continue
       const existing = map.get(a.seatId)
       if (!existing || a.timestamp > existing.timestamp) map.set(a.seatId, a)
     }
@@ -86,6 +102,8 @@ export function DashboardPage() {
                   severity={severityForCamera(cam, seats)}
                   latestAlert={cam.seats.map((s) => latestAlertBySeat.get(s)).find(Boolean) ?? null}
                   onOpen={() => openCamera(cam)}
+                  onToggleConnection={() => toggleConnection(cam)}
+                  toggling={toggling === cam.camera_id}
                 />
               ))}
             </div>
@@ -102,30 +120,36 @@ function DashboardTile({
   severity,
   latestAlert,
   onOpen,
+  onToggleConnection,
+  toggling,
 }: {
   cam: CameraInfo
   snapshot: string | null
   severity: { level: 'calm' | 'watch' | 'critical'; count: number; worstSeat: string | null }
   latestAlert: AlertItem | null
   onOpen: () => void
+  onToggleConnection: () => void
+  toggling: boolean
 }) {
   const clickable = !cam.disconnected && cam.seats.length > 0
-  // Two distinct reasons a tile can be non-calm: a formal alert fired
-  // (real explanation text available), or risk is elevated (e.g. a
-  // gesture in progress) without one having fired yet — the strip text
-  // must agree with the badge either way, not silently say "all calm"
-  // under a nonzero count.
-  const hasAlert = !cam.disconnected && severity.level !== 'calm' && !!latestAlert
-  const elevatedNoAlert = !cam.disconnected && severity.level !== 'calm' && !latestAlert
+  // A tile only leaves "calm" when a real, notify-worthy alert exists —
+  // not on every fluctuation of a student's raw risk score. Ordinary
+  // movement (stretching, glancing around) constantly crosses the
+  // watch/critical z-score bands and used to visibly flip the tile's color
+  // on every such crossing; that's exactly the "too dynamic" behaviour
+  // this was built to stop. Only something that already cleared the same
+  // review bar the Alert Inbox uses gets to change what this tile shows.
+  const hasAlert = !cam.disconnected && !!latestAlert
+  const level = hasAlert ? severity.level : 'calm'
 
   return (
     <motion.div
       whileHover={clickable ? { scale: 1.02 } : {}}
       onClick={clickable ? onOpen : undefined}
-      animate={!cam.disconnected && severity.level === 'critical' ? { borderColor: [BORDER_COLOR.critical, '#ff5a36ff', BORDER_COLOR.critical] } : {}}
-      transition={{ duration: 1.6, repeat: !cam.disconnected && severity.level === 'critical' ? Infinity : 0 }}
-      className={`rounded-2xl border overflow-hidden ${clickable ? 'cursor-pointer' : ''}`}
-      style={{ borderColor: cam.disconnected ? '#ffffff14' : BORDER_COLOR[severity.level] }}
+      animate={hasAlert && level === 'critical' ? { borderColor: [BORDER_COLOR.critical, '#ff5a36ff', BORDER_COLOR.critical] } : {}}
+      transition={{ duration: 1.6, repeat: hasAlert && level === 'critical' ? Infinity : 0 }}
+      className={`rounded-2xl border overflow-hidden relative ${clickable ? 'cursor-pointer' : ''}`}
+      style={{ borderColor: cam.disconnected ? '#ffffff14' : BORDER_COLOR[level] }}
     >
       <div className="relative" style={{ aspectRatio: '16/10', background: '#000' }}>
         {!cam.disconnected && snapshot ? (
@@ -146,29 +170,31 @@ function DashboardTile({
             {cam.disconnected ? 'disconnected' : cam.is_simulated ? 'simulated' : 'live'}
           </span>
         </div>
-        {!cam.disconnected && severity.count > 0 && (
-          <div className="absolute top-2 right-2 flex items-center gap-1 text-[9px] mono px-2 py-0.5 rounded-full" style={{ background: `${STRIP_COLOR[severity.level]}30`, color: STRIP_COLOR[severity.level] }}>
+        {!cam.disconnected && severity.count > 0 && hasAlert && (
+          <div className="absolute top-2 right-2 flex items-center gap-1 text-[9px] mono px-2 py-0.5 rounded-full" style={{ background: `${STRIP_COLOR[level]}30`, color: STRIP_COLOR[level] }}>
             <AlertTriangle size={9} /> {severity.count}
           </div>
         )}
+        <button
+          onClick={(e) => { e.stopPropagation(); onToggleConnection() }}
+          disabled={toggling}
+          title={cam.disconnected ? 'reconnect this source' : 'disconnect this source'}
+          className="absolute bottom-2 right-2 flex items-center gap-1 text-[9px] mono uppercase tracking-wide px-2 py-1 rounded-full bg-black/55 hover:bg-black/75 text-white/70 hover:text-white transition-colors disabled:opacity-50"
+        >
+          {cam.disconnected ? <Plug size={10} /> : <Unplug size={10} />}
+          {toggling ? '…' : cam.disconnected ? 'reconnect' : 'disconnect'}
+        </button>
       </div>
 
       {/* The one thing that actually matters to someone watching this
           tile: is there something suspicious, and what is it — plain
           language, pulled from the real alert, right on the block. */}
       {hasAlert ? (
-        <div className="px-3 py-2.5 border-t" style={{ borderColor: `${STRIP_COLOR[severity.level]}40`, background: `${STRIP_COLOR[severity.level]}12` }}>
-          <div className="text-[11px] font-bold mb-0.5" style={{ color: STRIP_COLOR[severity.level] }}>
+        <div className="px-3 py-2.5 border-t" style={{ borderColor: `${STRIP_COLOR[level]}40`, background: `${STRIP_COLOR[level]}12` }}>
+          <div className="text-[11px] font-bold mb-0.5" style={{ color: STRIP_COLOR[level] }}>
             {latestAlert!.seatId.toUpperCase()} — {latestAlert!.needsVerification ? 'possible activity, please verify' : 'suspicious activity'}
           </div>
           <p className="text-[10px] text-white/70 leading-snug line-clamp-2">{shortAlertSummary(latestAlert!.explanation)}</p>
-        </div>
-      ) : elevatedNoAlert ? (
-        <div className="px-3 py-2.5 border-t" style={{ borderColor: `${STRIP_COLOR[severity.level]}40`, background: `${STRIP_COLOR[severity.level]}12` }}>
-          <div className="text-[11px] font-bold" style={{ color: STRIP_COLOR[severity.level] }}>
-            {severity.worstSeat?.toUpperCase()} — elevated, watching
-          </div>
-          <p className="text-[10px] text-white/60 leading-snug">no confirmed incident yet — risk is above baseline</p>
         </div>
       ) : (
         <div className="px-3 py-2.5 border-t border-white/6">

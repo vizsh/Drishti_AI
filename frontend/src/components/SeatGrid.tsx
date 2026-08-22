@@ -17,7 +17,7 @@ import { EmptyState } from './EmptyState'
  *
  * Technical details live behind the click on /seat/:seatId.
  */
-export function SeatGrid({ seats }: { seats: Record<string, SeatState> }) {
+export function SeatGrid({ seats, alertedSeatIds }: { seats: Record<string, SeatState>; alertedSeatIds?: Set<string> }) {
   const ids = Object.keys(seats).sort()
   if (ids.length === 0) {
     return (
@@ -31,21 +31,26 @@ export function SeatGrid({ seats }: { seats: Record<string, SeatState> }) {
   return (
     <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
       {ids.map((id) => (
-        <SeatCard key={id} id={id} seat={seats[id]} />
+        <SeatCard key={id} id={id} seat={seats[id]} alerted={alertedSeatIds?.has(id) ?? false} />
       ))}
     </div>
   )
 }
 
-function SeatCard({ id, seat }: { id: string; seat: SeatState }) {
+function SeatCard({ id, seat, alerted }: { id: string; seat: SeatState; alerted: boolean }) {
   const navigate = useNavigate()
-  const level = seat.calibrated ? riskLevel(seat.risk) : null
-  const color = level ? STATUS_COLOR[level] : '#8b8578'
-  const pct = seat.calibrated ? Math.min(100, seat.risk * 100) : (seat.progress ?? 0) * 100
+  // A seat only shows a status color / pulse / filling bar once a real,
+  // notify-worthy alert exists for it (see OverviewPage's alertedSeatIds).
+  // Before that, every seat just reads "all calm" regardless of where its
+  // raw risk score happens to sit this frame — a student thinking,
+  // stretching, or glancing around should never visibly change this grid.
+  const level = seat.calibrated && alerted ? riskLevel(seat.risk) : null
+  const color = level ? STATUS_COLOR[level] : seat.calibrated ? STATUS_COLOR.calm : '#8b8578'
+  const pct = seat.calibrated ? (alerted ? Math.min(100, seat.risk * 100) : 100) : (seat.progress ?? 0) * 100
 
   // Human-readable labels instead of raw numbers
-  const statusLabel = seat.calibrated ? humanizeRisk(seat.risk) : humanizeCalibration(seat.progress ?? 0)
-  const behaviorHint = seat.calibrated ? humanizeYaw(seat.yawZ) : null
+  const statusLabel = seat.calibrated ? (alerted ? humanizeRisk(seat.risk) : 'All calm') : humanizeCalibration(seat.progress ?? 0)
+  const behaviorHint = seat.calibrated && alerted ? humanizeYaw(seat.yawZ) : null
 
   return (
     <motion.button

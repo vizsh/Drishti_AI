@@ -218,6 +218,7 @@ async def _retention_sweep_loop() -> None:
 @app.on_event("startup")
 async def startup() -> None:
     global session_id, deployment
+    await asyncio.to_thread(video_stream_manager.reap_stray_processes)
     deployment = load_deployment_config()
     db.init_db()
     session_id = db.create_session(deployment.primary_camera.video_path)
@@ -257,10 +258,18 @@ async def setup_hall_cameras(body: dict, user: dict = Depends(get_current_user))
 async def _set_camera_connection(camera_id: str, disconnected: bool) -> dict:
     global deployment
     async with _workers_lock:
+        cam_before = next((c for c in deployment.cameras if c.camera_id == camera_id), None) if deployment else None
         found = await asyncio.to_thread(set_camera_disconnected, camera_id, disconnected)
         if not found:
             raise HTTPException(status_code=404, detail=f"No camera '{camera_id}' in config/deployment.json")
         _stop_workers()
+        if disconnected and cam_before is not None:
+            # Taking the camera out of the pipeline is not enough on its own
+            # if its source is a local upload-as-live-feed relay (see
+            # video_stream_manager.py) — that ffmpeg process keeps looping
+            # forever unless told to stop here.
+            for path in cam_before.playlist:
+                await asyncio.to_thread(video_stream_manager.stop_stream_for_url, path)
         deployment = load_deployment_config()
         _start_workers()
     return {"status": "ok", "camera_id": camera_id, "disconnected": disconnected}

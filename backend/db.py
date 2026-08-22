@@ -265,7 +265,17 @@ def analytics_summary(session_id: Optional[int] = None, seat_ids: Optional[list[
     with SessionLocal() as db:
         alert_count_stmt = select(func.count()).select_from(EventLog).where(EventLog.event_type.in_(["alert", "gesture_alert"]))
         avg_risk_stmt = select(func.avg(EventLog.risk_score)).where(EventLog.event_type == "telemetry")
-        feedback_count_stmt = select(func.count()).select_from(EventLog).where(EventLog.event_type == "feedback")
+        # Bug fix (2026-08-22, caught live while testing §7.1's new labeled-
+        # feedback table): this used to count every EventLog row with
+        # event_type == "feedback" — which fires on EVERY resolution
+        # (false_alarm / confirmed / no_action alike) — while the UI it
+        # feeds (SystemLearningIndicator) presented it as specifically
+        # "false-positives dismissed." A "confirmed" resolution was
+        # inflating a stat that's supposed to represent the opposite
+        # outcome. Now counts real false_alarm resolutions from the
+        # FeedbackLabel table (§7.1), which has an actual resolution
+        # column instead of free-text needing to be pattern-matched.
+        feedback_count_stmt = select(func.count()).select_from(FeedbackLabel).where(FeedbackLabel.resolution == "false_alarm")
         per_seat_stmt = (
             select(EventLog.seat_id, func.count())
             .where(EventLog.event_type.in_(["alert", "gesture_alert"]))
@@ -274,12 +284,12 @@ def analytics_summary(session_id: Optional[int] = None, seat_ids: Optional[list[
         if session_id is not None:
             alert_count_stmt = alert_count_stmt.where(EventLog.session_id == session_id)
             avg_risk_stmt = avg_risk_stmt.where(EventLog.session_id == session_id)
-            feedback_count_stmt = feedback_count_stmt.where(EventLog.session_id == session_id)
+            feedback_count_stmt = feedback_count_stmt.where(FeedbackLabel.session_id == session_id)
             per_seat_stmt = per_seat_stmt.where(EventLog.session_id == session_id)
         if seat_ids:
             alert_count_stmt = alert_count_stmt.where(EventLog.seat_id.in_(seat_ids))
             avg_risk_stmt = avg_risk_stmt.where(EventLog.seat_id.in_(seat_ids))
-            feedback_count_stmt = feedback_count_stmt.where(EventLog.seat_id.in_(seat_ids))
+            feedback_count_stmt = feedback_count_stmt.where(FeedbackLabel.seat_id.in_(seat_ids))
             per_seat_stmt = per_seat_stmt.where(EventLog.seat_id.in_(seat_ids))
 
         alert_count = db.execute(alert_count_stmt).scalar() or 0

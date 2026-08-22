@@ -33,7 +33,12 @@ type Resolution = 'false_alarm' | 'confirmed' | 'no_action'
 interface Props {
   alert: AlertItem | null
   onClose: () => void
-  onDismiss: (seatId: string, resolution: Resolution, invigilator?: string) => Promise<void>
+  onDismiss: (
+    seatId: string,
+    resolution: Resolution,
+    invigilator?: string,
+    signal?: { signalType: string; objectLabel?: string; confidence?: number }
+  ) => Promise<void>
   onDispatch?: (seatId: string, invigilator: string) => Promise<void>
   onAcknowledge?: (seatId: string, invigilator: string) => Promise<void>
   onViewEvidence: (url: string) => void
@@ -61,7 +66,12 @@ export function ActionDrawer({ alert, onClose, onDismiss, onDispatch, onAcknowle
   const handleResolve = async (resolution: Resolution) => {
     if (!alert) return
     setResolved(resolution)
-    await onDismiss(alert.seatId, resolution, user?.name)
+    const signalType = alert.kind === 'gesture' ? 'gesture' : alert.kind === 'calibration_warning' ? 'calibration' : alert.objectLabel ? 'object' : 'behavioral'
+    await onDismiss(alert.seatId, resolution, user?.name, {
+      signalType,
+      objectLabel: alert.objectLabel ?? undefined,
+      confidence: alert.confidence,
+    })
   }
 
   const handleDispatch = async () => {

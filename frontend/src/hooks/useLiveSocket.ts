@@ -130,6 +130,7 @@ export function useLiveSocket() {
               explanation: ev.explanation ?? '',
               notify: ev.notify,
               occurrence: ev.occurrence,
+              neighborSeat: ev.neighbor_seat,
             },
             ...prev,
           ].slice(0, 60))

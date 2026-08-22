@@ -36,6 +36,7 @@ export interface AlertItem {
   notify?: boolean
   occurrence?: number
   needsVerification?: boolean
+  neighborSeat?: string | null
 }
 
 export interface WsEvent {
@@ -63,4 +64,5 @@ export interface WsEvent {
   notify?: boolean
   occurrence?: number
   needs_verification?: boolean
+  neighbor_seat?: string | null
 }

@@ -4,6 +4,7 @@ import { CoveragePanel } from '../components/CoveragePanel'
 import { ExamTypeSelector } from '../components/ExamTypeSelector'
 import { RoomScanOverlay } from '../components/RoomScanOverlay'
 import { ClassroomDigitalTwin } from '../components/ClassroomDigitalTwin'
+import { HallDigitalTwinGrid } from '../components/HallDigitalTwinGrid'
 import { useHallScope } from '../state/useHallScope'
 
 interface SeatEntry {
@@ -91,6 +92,7 @@ export function LabSetupPage() {
   const [blindSpotError, setBlindSpotError] = useState<string | null>(null)
   const [scanningCameraId, setScanningCameraId] = useState<string | null>(null)
   const [twinCameraId, setTwinCameraId] = useState<string | null>(null)
+  const [twinWholeHall, setTwinWholeHall] = useState(false)
   const [loadedHall, setLoadedHall] = useState<string | null>(null)
 
   // Bug fix (2026-08-22): this form used to always start from a single
@@ -457,22 +459,38 @@ export function LabSetupPage() {
             a persistent, live-sensing view of this room — real calibrated seat geometry, colored and labeled by the
             same live risk state as Live Monitor, updating continuously as part of setting the room up
           </p>
-          <div className="flex flex-wrap gap-2 mb-3">
+          <div className="flex flex-wrap items-center gap-2 mb-3">
             {deployedCameras
               .filter((cam) => cam.has_own_worker)
               .map((cam) => (
                 <button
                   key={cam.camera_id}
-                  onClick={() => setTwinCameraId(twinCameraId === cam.camera_id ? null : cam.camera_id)}
+                  onClick={() => {
+                    setTwinWholeHall(false)
+                    setTwinCameraId(twinCameraId === cam.camera_id ? null : cam.camera_id)
+                  }}
                   className={`flex items-center gap-1.5 text-[11px] mono px-3 py-2 rounded-lg border transition-colors ${
-                    twinCameraId === cam.camera_id ? 'border-white/40 bg-white/10 text-white' : 'border-white/15 text-white/70 hover:border-white/30'
+                    !twinWholeHall && twinCameraId === cam.camera_id ? 'border-white/40 bg-white/10 text-white' : 'border-white/15 text-white/70 hover:border-white/30'
                   }`}
                 >
-                  <Radar size={12} /> {twinCameraId === cam.camera_id ? 'hide' : 'sense'} {cam.camera_id}
+                  <Radar size={12} /> {!twinWholeHall && twinCameraId === cam.camera_id ? 'hide' : 'sense'} {cam.camera_id}
                 </button>
               ))}
+            <span className="w-px h-5 bg-white/10 mx-1" />
+            <button
+              onClick={() => {
+                setTwinCameraId(null)
+                setTwinWholeHall((v) => !v)
+              }}
+              className={`flex items-center gap-1.5 text-[11px] mono px-3 py-2 rounded-lg border transition-colors ${
+                twinWholeHall ? 'border-white/40 bg-white/10 text-white' : 'border-white/15 text-white/70 hover:border-white/30'
+              }`}
+            >
+              <Radar size={12} /> {twinWholeHall ? 'hide' : 'sense'} whole hall ({hall})
+            </button>
           </div>
-          {twinCameraId && <ClassroomDigitalTwin cameraId={twinCameraId} />}
+          {twinCameraId && !twinWholeHall && <ClassroomDigitalTwin cameraId={twinCameraId} />}
+          {twinWholeHall && <HallDigitalTwinGrid hall={hall} />}
         </div>
       )}
 

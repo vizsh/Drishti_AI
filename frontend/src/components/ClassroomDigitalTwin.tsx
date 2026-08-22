@@ -1,17 +1,25 @@
-import { useEffect, useMemo, useState } from 'react'
-import { motion } from 'framer-motion'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { motion, AnimatePresence } from 'framer-motion'
 import { Radar, ShieldCheck, Smartphone } from 'lucide-react'
 import { useLive } from '../state/LiveContext'
 import { STATUS_COLOR, riskLevel } from '../lib/colors'
 import type { AlertItem } from '../types'
 
 const HUD_CYAN = '#5ad1ff'
+const GESTURE_LINK_LIFETIME_MS = 2600
 
 interface Layout {
   camera_id: string
   image_width: number
   image_height: number
   seat_boxes: Record<string, [number, number, number, number]>
+}
+
+interface GestureLink {
+  id: string
+  from: string
+  to: string
+  bornAt: number
 }
 
 // Product request (2026-08-22): "a digital twin of the classroom while
@@ -27,10 +35,12 @@ interface Layout {
 // rule as Live Monitor/Examination Hall: a seat's box only leaves calm
 // once a real, notify-worthy alert exists for it.
 export function ClassroomDigitalTwin({ cameraId }: { cameraId: string }) {
-  const { seats, alerts, feedImages, setStreamMode } = useLive()
+  const { seats, alerts, feedImages, riskHistory, setStreamMode } = useLive()
   const [layout, setLayout] = useState<Layout | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [sweep, setSweep] = useState(0)
+  const [gestureLinks, setGestureLinks] = useState<GestureLink[]>([])
+  const seenGestureIds = useRef<Set<string>>(new Set())
 
   useEffect(() => {
     setLayout(null)
@@ -76,6 +86,28 @@ export function ClassroomDigitalTwin({ cameraId }: { cameraId: string }) {
     return map
   }, [alerts])
 
+  // Feature: live gesture link lines. A hand-reach gesture is a real
+  // physical event between two specific seats (backend/behaviour/
+  // gestures.py's GestureEvent.neighbor_seat) — draw the actual line
+  // between them for a few seconds when one arrives, instead of only
+  // showing it as text in the alert feed elsewhere.
+  useEffect(() => {
+    if (!layout) return
+    const seatSet = new Set(Object.keys(layout.seat_boxes))
+    for (const a of alerts) {
+      if (a.kind !== 'gesture' || !a.neighborSeat) continue
+      if (!seatSet.has(a.seatId) && !seatSet.has(a.neighborSeat)) continue
+      if (seenGestureIds.current.has(a.id)) continue
+      seenGestureIds.current.add(a.id)
+      const link: GestureLink = { id: a.id, from: a.seatId, to: a.neighborSeat, bornAt: Date.now() }
+      setGestureLinks((prev) => [...prev, link])
+      setTimeout(() => {
+        setGestureLinks((prev) => prev.filter((l) => l.id !== link.id))
+      }, GESTURE_LINK_LIFETIME_MS)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [alerts, layout])
+
   if (error) {
     return (
       <div className="rounded-2xl border border-white/8 p-8 text-center">
@@ -98,6 +130,10 @@ export function ClassroomDigitalTwin({ cameraId }: { cameraId: string }) {
   const seatIds = Object.keys(layout.seat_boxes)
   const calibratedCount = seatIds.filter((id) => seats[id]?.calibrated).length
   const alertedCount = seatIds.filter((id) => latestAlertBySeat.has(id)).length
+  const centerOf = (id: string): [number, number] => {
+    const [x1, y1, x2, y2] = layout.seat_boxes[id]
+    return [(x1 + x2) / 2, (y1 + y2) / 2]
+  }
 
   return (
     <div className="rounded-2xl border border-white/8 overflow-hidden" style={{ background: '#0a0a0d' }}>
@@ -157,7 +193,41 @@ export function ClassroomDigitalTwin({ cameraId }: { cameraId: string }) {
             opacity={0.35}
           />
 
+          {/* camera FOV cone, replacing a plain dot — reads as a lens
+              looking down at the seats rather than an abstract marker */}
+          <polygon
+            points={`${camIconX},${camIconY} ${camIconX - imgW * 0.14},${imgH * 0.42} ${camIconX + imgW * 0.14},${imgH * 0.42}`}
+            fill={HUD_CYAN}
+            opacity={0.05}
+          />
           <circle cx={camIconX} cy={camIconY} r={imgW * 0.012} fill={HUD_CYAN} opacity={0.9} />
+
+          {/* risk-history glow trail: a soft halo per seat sized off the
+              real last-60s average risk (useLive().riskHistory), so a
+              reviewer sees a recent PATTERN, not just this instant's
+              state — a seat that's been climbing looks different from one
+              that spiked once and settled, even though both may show
+              "calm" right now. */}
+          {seatIds.map((seatId) => {
+            const points = riskHistory[seatId] ?? []
+            if (points.length === 0) return null
+            const avg = points.reduce((s, p) => s + p.risk, 0) / points.length
+            if (avg < 0.08) return null
+            const [cx, cy] = centerOf(seatId)
+            const [x1, y1, x2, y2] = layout.seat_boxes[seatId]
+            const boxR = Math.max(x2 - x1, y2 - y1) / 2
+            const level = riskLevel(avg)
+            return (
+              <circle
+                key={`glow-${seatId}`}
+                cx={cx}
+                cy={cy}
+                r={boxR * (1.3 + avg)}
+                fill={STATUS_COLOR[level]}
+                opacity={Math.min(0.16, avg * 0.22)}
+              />
+            )
+          })}
 
           {seatIds.map((seatId) => {
             const [x1, y1, x2, y2] = layout.seat_boxes[seatId]
@@ -180,6 +250,26 @@ export function ClassroomDigitalTwin({ cameraId }: { cameraId: string }) {
                   stroke={color}
                   strokeWidth={imgW * (alerted ? 0.0028 : 0.0018)}
                 />
+                {/* ambient particle drift on calm, sensed seats — reads as
+                    "actively watching, nothing wrong" rather than frozen */}
+                {sensed && !alerted && (
+                  <>
+                    <motion.circle
+                      r={imgW * 0.0035}
+                      fill={STATUS_COLOR.calm}
+                      opacity={0.5}
+                      animate={{ cx: [x1 + 4, x2 - 4, x1 + 4], cy: [y1 + 4, y2 - 4, y1 + 4] }}
+                      transition={{ duration: 6, repeat: Infinity, ease: 'easeInOut' }}
+                    />
+                    <motion.circle
+                      r={imgW * 0.0025}
+                      fill={STATUS_COLOR.calm}
+                      opacity={0.35}
+                      animate={{ cx: [x2 - 4, x1 + 4, x2 - 4], cy: [y2 - 4, y1 + 4, y2 - 4] }}
+                      transition={{ duration: 7.5, repeat: Infinity, ease: 'easeInOut' }}
+                    />
+                  </>
+                )}
                 <rect x={x1} y={y1 - imgH * 0.03} width={imgW * 0.1} height={imgH * 0.026} fill={`${color}25`} stroke={color} strokeWidth={1} />
                 <text x={x1 + imgW * 0.004} y={y1 - imgH * 0.011} fill={color} fontSize={imgH * 0.017} fontFamily="monospace" fontWeight="bold">
                   {seatId.replace('seat_', 'S')}{!sensed ? ' idle' : alerted ? ' !' : ''}
@@ -187,6 +277,32 @@ export function ClassroomDigitalTwin({ cameraId }: { cameraId: string }) {
               </g>
             )
           })}
+
+          {/* live gesture link lines — a real hand-reach between two
+              actual seats, fading out a few seconds after it happens */}
+          <AnimatePresence>
+            {gestureLinks
+              .filter((l) => seatIds.includes(l.from) && seatIds.includes(l.to))
+              .map((l) => {
+                const [x1, y1] = centerOf(l.from)
+                const [x2, y2] = centerOf(l.to)
+                return (
+                  <motion.line
+                    key={l.id}
+                    x1={x1}
+                    y1={y1}
+                    x2={x2}
+                    y2={y2}
+                    stroke={STATUS_COLOR.watch}
+                    strokeWidth={imgW * 0.003}
+                    initial={{ opacity: 0, pathLength: 0 }}
+                    animate={{ opacity: [0, 0.9, 0.9, 0], pathLength: 1 }}
+                    exit={{ opacity: 0 }}
+                    transition={{ duration: GESTURE_LINK_LIFETIME_MS / 1000, times: [0, 0.15, 0.7, 1] }}
+                  />
+                )
+              })}
+          </AnimatePresence>
         </svg>
 
         {/* real object-detection callouts, drawn above the SVG layer */}
@@ -210,7 +326,7 @@ export function ClassroomDigitalTwin({ cameraId }: { cameraId: string }) {
 
       <div className="px-4 py-2.5 border-t border-white/8">
         <p className="text-[10px] mono text-white/30">
-          every box is this camera's real calibrated seat position — color and labels follow the same live risk state as Live Monitor, not a simulation.
+          every box is this camera's real calibrated seat position — color, glow, and links follow the same live risk/gesture state as Live Monitor, not a simulation.
         </p>
       </div>
     </div>

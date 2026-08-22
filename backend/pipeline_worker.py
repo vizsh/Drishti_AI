@@ -672,6 +672,16 @@ class PipelineWorker(threading.Thread):
                                         # the invigilator once per cooldown.
                                         "notify": gesture_notify,
                                         "occurrence": self._seat_gesture_counts[seat_id],
+                                        # Digital twin (2026-08-22): the
+                                        # target seat a hand crossed into —
+                                        # GestureEvent already computes this
+                                        # (nearest_neighbor_seat), it just
+                                        # wasn't exposed on the wire before.
+                                        # Lets the twin draw a real link
+                                        # between the two actual seats
+                                        # involved instead of only labeling
+                                        # the source seat.
+                                        "neighbor_seat": gesture_event.neighbor_seat,
                                     }
                                 )
 

@@ -12,12 +12,9 @@
     "seat_9",
     "seat_10",
     "seat_20",
-    "seat_d04",
-    "seat_d05",
+    "seat_d03",
     "seat_d07",
-    "seat_d08",
-    "seat_d09",
-    "seat_d10"
+    "seat_d08"
   ],
   "settling_seconds": 20.0,
   "object_detect_confidence": 0.2,
@@ -315,7 +312,7 @@
     },
     {
       "camera_id": "camera5_workstation",
-      "_comment": "New real footage added 2026-08-23 (user-supplied, 'CAMERA5_2026_08_11_14_58_17.mkv', ~3 hours, real workstation/computer-lab CCTV with numbered desk placards 04/05/07/08/09/10 physically visible in frame). Identity homography (image_points == plane_points, the full frame) so seat positions are given directly in pixel space with no projective distortion to reason about -- same simplification cam_ground_truth uses. Seat positions are visual estimates from a single sampled frame, not a measured calibration (calibrate_tool.py) -- same honest caveat as every other illustrative camera in this file. Seat IDs are prefixed seat_d04.. (not seat_4/seat_7/etc.) specifically to avoid colliding with the existing seat_4/seat_7/seat_8/seat_9/seat_10 already assigned to Hall A/B's cameras above -- this is a genuinely separate room (Hall D), not a replacement for anything.",
+      "_comment": "Recalibrated 2026-08-23 (v2). v1 used positions eyeballed from a single frame description with no pixel measurement, and produced a real 92-second false 'hand_reach_across' (a wrist keypoint persistently resolving to the wrong seat) -- disconnected immediately, root cause investigated. This pass extracted real frames, overlaid a measured pixel grid (cv2, 100px lines with coordinate labels), and read hand/mouse-work-area coordinates directly off the grid at multiple timestamps, not off a mental estimate. Coverage is DELIBERATELY reduced from 6 seats to 3 (seat_d03/d07/d08): desks 04/05/09/10 remain genuinely ambiguous even under careful grid-referenced review in this single wide-angle/fisheye shot -- overlapping desks at different depths, an unlabeled/occluded placard for one, and two desks (09/10) whose visible activity zones overlap heavily. Forcing coordinates for those would repeat exactly the mistake this recalibration exists to fix; 3 confidently-placed seats beats 6 uncertain ones. Coordinates are the desk's real hand/mouse-work area (where a wrist actually operates), not the monitor or placard position, since that's what nearest_seat() actually needs to get right for gesture detection. Identity homography (image_points == plane_points, the full frame) -- same simplification cam_ground_truth uses. Still not a calibrate_tool.py measurement (no physical access to this room), so still illustrative-grade, not survey-grade -- but now grid-measured, not guessed, and the general MAX_PLAUSIBLE_REACH_SECONDS safeguard (behaviour/gestures.py) remains as a backstop regardless.",
       "video_path": "data/test_videos/CAMERA5_2026_08_11_14_58_17.mkv",
       "image_width": 1280,
       "image_height": 720,
@@ -355,35 +352,23 @@
           720
         ]
       ],
-      "max_snap_distance": 180,
+      "max_snap_distance": 110,
       "is_simulated": false,
       "seats": {
-        "seat_d04": [
-          950,
-          180
-        ],
-        "seat_d05": [
-          1080,
-          320
+        "seat_d03": [
+          930,
+          220
         ],
         "seat_d07": [
-          600,
-          430
+          580,
+          480
         ],
         "seat_d08": [
-          560,
-          230
-        ],
-        "seat_d09": [
-          500,
-          130
-        ],
-        "seat_d10": [
-          480,
-          70
+          510,
+          300
         ]
       },
-      "disconnected": true
+      "disconnected": false
     }
   ]
 }
